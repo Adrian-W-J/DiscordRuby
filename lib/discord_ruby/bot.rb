@@ -7,6 +7,9 @@ module DiscordRuby
       super(token: token)
       @gateway = Gateway.new(token: token, intents: intents, gateway_url: gateway_url)
       @command_registry = CommandRegistry.new
+      @autocomplete_registry = CommandRegistry.new
+      @component_handlers = Hash.new { |hash, key| hash[key] = [] }
+      @modal_handlers = Hash.new { |hash, key| hash[key] = [] }
       @interaction_handlers = []
       @users = Cache.new(limit: cache_size)
       @guilds = Cache.new(limit: cache_size)
@@ -24,6 +27,18 @@ module DiscordRuby
 
     def on_command(name, &block)
       @command_registry.register(name, &block)
+    end
+
+    def on_autocomplete(name, &block)
+      @autocomplete_registry.register(name, &block)
+    end
+
+    def on_component(custom_id, &block)
+      @component_handlers[custom_id.to_s] << block
+    end
+
+    def on_modal_submit(custom_id, &block)
+      @modal_handlers[custom_id.to_s] << block
     end
 
     def on_interaction(&block)
@@ -48,6 +63,14 @@ module DiscordRuby
 
     def respond_to_interaction(interaction_id, interaction_token, type, data = {})
       create_interaction_response(interaction_id, interaction_token, type, data)
+    end
+
+    def show_modal(interaction_id, interaction_token, modal)
+      create_modal_response(interaction_id, interaction_token, modal)
+    end
+
+    def respond_autocomplete(interaction_id, interaction_token, choices)
+      create_autocomplete_response(interaction_id, interaction_token, choices)
     end
 
     def edit_interaction_response(data = {})
@@ -89,16 +112,29 @@ module DiscordRuby
 
     def handle_interaction_create(payload)
       @current_interaction_token = payload['token']
+
       @interaction_handlers.each do |handler|
         handler.call(payload)
       rescue StandardError => error
         dispatch_error(error)
       end
 
-      if payload['type'] == Interaction::InteractionType::APPLICATION_COMMAND
+      case payload['type']
+      when Interaction::InteractionType::APPLICATION_COMMAND
         command_name = payload.dig('data', 'name')
         @command_registry.dispatch(command_name, payload)
+      when Interaction::InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE
+        command_name = payload.dig('data', 'name')
+        @autocomplete_registry.dispatch(command_name, payload)
+      when Interaction::InteractionType::MESSAGE_COMPONENT
+        custom_id = payload.dig('data', 'custom_id')
+        @component_handlers[custom_id].each { |handler| handler.call(payload) }
+      when Interaction::InteractionType::MODAL_SUBMIT
+        custom_id = payload.dig('data', 'custom_id')
+        @modal_handlers[custom_id].each { |handler| handler.call(payload) }
       end
+    rescue StandardError => error
+      dispatch_error(error)
     end
 
     def dispatch_error(error)

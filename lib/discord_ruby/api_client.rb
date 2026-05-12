@@ -262,6 +262,16 @@ module DiscordRuby
       request(:post, "/interactions/#{interaction_id}/#{token}/callback", body: {type: type, data: data})
     end
 
+    def create_autocomplete_response(interaction_id, token, choices)
+      body = {type: Interaction::ResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT, data: {choices: choices}}
+      request(:post, "/interactions/#{interaction_id}/#{token}/callback", body: body)
+    end
+
+    def create_modal_response(interaction_id, token, modal)
+      payload = modal.respond_to?(:to_h) ? modal.to_h : modal
+      create_interaction_response(interaction_id, token, Interaction::ResponseType::MODAL, payload)
+    end
+
     def edit_original_interaction_response(application_id, token, data = {})
       request(:patch, "/webhooks/#{application_id}/#{token}/messages/@original", body: data)
     end

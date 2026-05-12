@@ -15,23 +15,48 @@ module DiscordRuby
       @fields = []
     end
 
-    def footer(text:, icon_url: nil)
-      @footer = {text: text, icon_url: icon_url}.compact
+    def set_title(text)
+      @title = text
       self
     end
 
-    def image(url:)
-      @image = {url: url}
+    def set_description(text)
+      @description = text
       self
     end
 
-    def thumbnail(url:)
-      @thumbnail = {url: url}
+    def set_url(url)
+      @url = url
       self
     end
 
-    def author(name:, url: nil, icon_url: nil)
-      @author = {name: name, url: url, icon_url: icon_url}.compact
+    def set_timestamp(value = Time.now)
+      @timestamp = value.respond_to?(:iso8601) ? value.iso8601 : value
+      self
+    end
+
+    def set_color(value)
+      @color = value
+      self
+    end
+
+    def footer(text:, icon_url: nil, proxy_icon_url: nil)
+      @footer = {text: text, icon_url: icon_url, proxy_icon_url: proxy_icon_url}.compact
+      self
+    end
+
+    def image(url:, proxy_url: nil, height: nil, width: nil)
+      @image = {url: url, proxy_url: proxy_url, height: height, width: width}.compact
+      self
+    end
+
+    def thumbnail(url:, proxy_url: nil, height: nil, width: nil)
+      @thumbnail = {url: url, proxy_url: proxy_url, height: height, width: width}.compact
+      self
+    end
+
+    def author(name:, url: nil, icon_url: nil, proxy_icon_url: nil)
+      @author = {name: name, url: url, icon_url: icon_url, proxy_icon_url: proxy_icon_url}.compact
       self
     end
 

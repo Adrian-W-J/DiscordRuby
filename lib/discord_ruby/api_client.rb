@@ -14,8 +14,13 @@ module DiscordRuby
     end
 
     def request(method, path, params: nil, body: nil, headers: {})
-      uri = URI.join(DiscordRuby::API_BASE, path)
+      uri = URI("#{DiscordRuby::API_BASE}#{path}")
       uri.query = URI.encode_www_form(params) if params && !params.empty?
+      
+      if ENV['DEBUG']
+        puts "[DEBUG] API Request: #{method.upcase} #{uri}"
+        puts "[DEBUG] Body: #{body.inspect}" if body
+      end
 
       request_class = case method.to_s.downcase
                       when 'get' then Net::HTTP::Get
@@ -70,8 +75,8 @@ module DiscordRuby
 
       body = {content: content}
       body[:tts] = options[:tts] if options.key?(:tts)
-      body[:embeds] = options[:embeds] if options.key?(:embeds)
-      body[:components] = options[:components] if options.key?(:components)
+      body[:embeds] = options[:embeds].map { |e| e.respond_to?(:to_h) ? e.to_h : e } if options.key?(:embeds) && options[:embeds]
+      body[:components] = options[:components].map { |c| c.respond_to?(:to_h) ? c.to_h : c } if options.key?(:components) && options[:components]
       body[:flags] = options[:flags] if options.key?(:flags)
       request(:post, "/channels/#{channel_id}/messages", body: body)
     end
@@ -79,14 +84,18 @@ module DiscordRuby
     def edit_message(channel_id, message_id, content: nil, **options)
       body = {}
       body[:content] = content if content
-      body[:embeds] = options[:embeds] if options.key?(:embeds)
-      body[:components] = options[:components] if options.key?(:components)
+      body[:embeds] = options[:embeds].map { |e| e.respond_to?(:to_h) ? e.to_h : e } if options.key?(:embeds) && options[:embeds]
+      body[:components] = options[:components].map { |c| c.respond_to?(:to_h) ? c.to_h : c } if options.key?(:components) && options[:components]
       body[:flags] = options[:flags] if options.key?(:flags)
       request(:patch, "/channels/#{channel_id}/messages/#{message_id}", body: body)
     end
 
     def delete_message(channel_id, message_id)
       request(:delete, "/channels/#{channel_id}/messages/#{message_id}")
+    end
+
+    def bulk_delete_messages(channel_id, message_ids)
+      request(:post, "/channels/#{channel_id}/messages/bulk-delete", body: {messages: message_ids})
     end
 
     def crosspost_message(channel_id, message_id)
@@ -220,7 +229,11 @@ module DiscordRuby
     end
 
     def create_guild_sticker(guild_id, name:, description:, tags:, file:, **options)
-      request(:post, "/guilds/#{guild_id}/stickers", body: options.merge(name: name, description: description, tags: tags, file: file))
+      # Discord stickers require multipart/form-data for file upload, 
+      # but for now we'll implement the basic structure.
+      body = {name: name, description: description, tags: tags}
+      body[:reason] = options[:reason] if options[:reason]
+      request(:post, "/guilds/#{guild_id}/stickers", body: body)
     end
 
     def edit_guild_sticker(guild_id, sticker_id, **options)
@@ -229,6 +242,267 @@ module DiscordRuby
 
     def delete_guild_sticker(guild_id, sticker_id)
       request(:delete, "/guilds/#{guild_id}/stickers/#{sticker_id}")
+    end
+
+    # Voice Region
+    def list_voice_regions
+      request(:get, '/voice/regions')
+    end
+
+    def fetch_guild_voice_regions(guild_id)
+      request(:get, "/guilds/#{guild_id}/regions")
+    end
+
+    # Audit Log
+    def fetch_guild_audit_log(guild_id, **params)
+      request(:get, "/guilds/#{guild_id}/audit-logs", params: params)
+    end
+
+    # Scheduled Events
+    def list_guild_scheduled_events(guild_id, with_user_count: false)
+      request(:get, "/guilds/#{guild_id}/scheduled-events", params: {with_user_count: with_user_count})
+    end
+
+    def create_guild_scheduled_event(guild_id, **options)
+      request(:post, "/guilds/#{guild_id}/scheduled-events", body: options)
+    end
+
+    def fetch_guild_scheduled_event(guild_id, event_id, with_user_count: false)
+      request(:get, "/guilds/#{guild_id}/scheduled-events/#{event_id}", params: {with_user_count: with_user_count})
+    end
+
+    def edit_guild_scheduled_event(guild_id, event_id, **options)
+      request(:patch, "/guilds/#{guild_id}/scheduled-events/#{event_id}", body: options)
+    end
+
+    def delete_guild_scheduled_event(guild_id, event_id)
+      request(:delete, "/guilds/#{guild_id}/scheduled-events/#{event_id}")
+    end
+
+    def fetch_guild_scheduled_event_users(guild_id, event_id, limit: 100, with_member: false, before: nil, after: nil)
+      params = {limit: limit, with_member: with_member}
+      params[:before] = before if before
+      params[:after] = after if after
+      request(:get, "/guilds/#{guild_id}/scheduled-events/#{event_id}/users", params: params)
+    end
+
+    # Guild Template
+    def fetch_guild_template(template_code)
+      request(:get, "/guilds/templates/#{template_code}")
+    end
+
+    def create_guild_from_template(template_code, name, icon: nil)
+      body = {name: name}
+      body[:icon] = icon if icon
+      request(:post, "/guilds/templates/#{template_code}", body: body)
+    end
+
+    def fetch_guild_templates(guild_id)
+      request(:get, "/guilds/#{guild_id}/templates")
+    end
+
+    def create_guild_template(guild_id, name:, description: nil)
+      body = {name: name, description: description}
+      request(:post, "/guilds/#{guild_id}/templates", body: body)
+    end
+
+    def sync_guild_template(guild_id, template_code)
+      request(:put, "/guilds/#{guild_id}/templates/#{template_code}")
+    end
+
+    def edit_guild_template(guild_id, template_code, **options)
+      request(:patch, "/guilds/#{guild_id}/templates/#{template_code}", body: options)
+    end
+
+    def delete_guild_template(guild_id, template_code)
+      request(:delete, "/guilds/#{guild_id}/templates/#{template_code}")
+    end
+
+    # Guild Welcome Screen
+    def fetch_guild_welcome_screen(guild_id)
+      request(:get, "/guilds/#{guild_id}/welcome-screen")
+    end
+
+    def edit_guild_welcome_screen(guild_id, **options)
+      request(:patch, "/guilds/#{guild_id}/welcome-screen", body: options)
+    end
+
+    # Guild Onboarding
+    def fetch_guild_onboarding(guild_id)
+      request(:get, "/guilds/#{guild_id}/onboarding")
+    end
+
+    def edit_guild_onboarding(guild_id, **options)
+      request(:patch, "/guilds/#{guild_id}/onboarding", body: options)
+    end
+
+    # Entitlements (Applications)
+    def list_entitlements(application_id, **params)
+      request(:get, "/applications/#{application_id}/entitlements", params: params)
+    end
+
+    def create_test_entitlement(application_id, sku_id, owner_id, owner_type)
+      body = {sku_id: sku_id, owner_id: owner_id, owner_type: owner_type}
+      request(:post, "/applications/#{application_id}/entitlements", body: body)
+    end
+
+    def delete_test_entitlement(application_id, entitlement_id)
+      request(:delete, "/applications/#{application_id}/entitlements/#{entitlement_id}")
+    end
+
+    # Polls (Message related)
+    def expire_poll(channel_id, message_id)
+      request(:post, "/channels/#{channel_id}/messages/#{message_id}/poll/expire")
+    end
+
+    def fetch_poll_answer_voters(channel_id, message_id, answer_id, after: nil, limit: 100)
+      params = {after: after, limit: limit}.compact
+      request(:get, "/channels/#{channel_id}/messages/#{message_id}/poll/answers/#{answer_id}", params: params)
+    end
+
+    # Thread Management
+    def start_thread_from_message(channel_id, message_id, name:, auto_archive_duration: nil, rate_limit_per_user: nil)
+      body = {name: name}
+      body[:auto_archive_duration] = auto_archive_duration if auto_archive_duration
+      body[:rate_limit_per_user] = rate_limit_per_user if rate_limit_per_user
+      request(:post, "/channels/#{channel_id}/messages/#{message_id}/threads", body: body)
+    end
+
+    def start_thread_without_message(channel_id, name:, auto_archive_duration: nil, type: nil, invitable: nil, rate_limit_per_user: nil)
+      body = {name: name}
+      body[:auto_archive_duration] = auto_archive_duration if auto_archive_duration
+      body[:type] = type if type
+      body[:invitable] = invitable unless invitable.nil?
+      body[:rate_limit_per_user] = rate_limit_per_user if rate_limit_per_user
+      request(:post, "/channels/#{channel_id}/threads", body: body)
+    end
+
+    def join_thread(channel_id)
+      request(:put, "/channels/#{channel_id}/thread-members/@me")
+    end
+
+    def add_thread_member(channel_id, user_id)
+      request(:put, "/channels/#{channel_id}/thread-members/#{user_id}")
+    end
+
+    def leave_thread(channel_id)
+      request(:delete, "/channels/#{channel_id}/thread-members/@me")
+    end
+
+    def remove_thread_member(channel_id, user_id)
+      request(:delete, "/channels/#{channel_id}/thread-members/#{user_id}")
+    end
+
+    def fetch_thread_member(channel_id, user_id)
+      request(:get, "/channels/#{channel_id}/thread-members/#{user_id}")
+    end
+
+    def list_thread_members(channel_id)
+      request(:get, "/channels/#{channel_id}/thread-members")
+    end
+
+    def list_active_threads(guild_id)
+      request(:get, "/guilds/#{guild_id}/threads/active")
+    end
+
+    def list_public_archived_threads(channel_id, before: nil, limit: nil)
+      params = {}
+      params[:before] = before if before
+      params[:limit] = limit if limit
+      request(:get, "/channels/#{channel_id}/threads/archived/public", params: params)
+    end
+
+    def list_private_archived_threads(channel_id, before: nil, limit: nil)
+      params = {}
+      params[:before] = before if before
+      params[:limit] = limit if limit
+      request(:get, "/channels/#{channel_id}/threads/archived/private", params: params)
+    end
+
+    def list_joined_private_archived_threads(channel_id, before: nil, limit: nil)
+      params = {}
+      params[:before] = before if before
+      params[:limit] = limit if limit
+      request(:get, "/channels/#{channel_id}/users/@me/threads/archived/private", params: params)
+    end
+
+    # Webhooks
+    def create_webhook(channel_id, name:, avatar: nil)
+      body = {name: name}
+      body[:avatar] = avatar if avatar
+      request(:post, "/channels/#{channel_id}/webhooks", body: body)
+    end
+
+    def fetch_channel_webhooks(channel_id)
+      request(:get, "/channels/#{channel_id}/webhooks")
+    end
+
+    def fetch_guild_webhooks(guild_id)
+      request(:get, "/guilds/#{guild_id}/webhooks")
+    end
+
+    def fetch_webhook(webhook_id)
+      request(:get, "/webhooks/#{webhook_id}")
+    end
+
+    def fetch_webhook_with_token(webhook_id, token)
+      request(:get, "/webhooks/#{webhook_id}/#{token}")
+    end
+
+    def edit_webhook(webhook_id, name: nil, avatar: nil, channel_id: nil)
+      body = {}
+      body[:name] = name if name
+      body[:avatar] = avatar if avatar
+      body[:channel_id] = channel_id if channel_id
+      request(:patch, "/webhooks/#{webhook_id}", body: body)
+    end
+
+    def delete_webhook(webhook_id)
+      request(:delete, "/webhooks/#{webhook_id}")
+    end
+
+    # Auto Moderation
+    def list_auto_moderation_rules(guild_id)
+      request(:get, "/guilds/#{guild_id}/auto-moderation/rules")
+    end
+
+    def fetch_auto_moderation_rule(guild_id, rule_id)
+      request(:get, "/guilds/#{guild_id}/auto-moderation/rules/#{rule_id}")
+    end
+
+    def create_auto_moderation_rule(guild_id, **options)
+      request(:post, "/guilds/#{guild_id}/auto-moderation/rules", body: options)
+    end
+
+    def edit_auto_moderation_rule(guild_id, rule_id, **options)
+      request(:patch, "/guilds/#{guild_id}/auto-moderation/rules/#{rule_id}", body: options)
+    end
+
+    def delete_auto_moderation_rule(guild_id, rule_id)
+      request(:delete, "/guilds/#{guild_id}/auto-moderation/rules/#{rule_id}")
+    end
+
+    # Stage Instance
+    def create_stage_instance(channel_id, topic:, privacy_level: nil, send_start_notification: nil)
+      body = {channel_id: channel_id, topic: topic}
+      body[:privacy_level] = privacy_level if privacy_level
+      body[:send_start_notification] = send_start_notification unless send_start_notification.nil?
+      request(:post, '/stage-instances', body: body)
+    end
+
+    def fetch_stage_instance(channel_id)
+      request(:get, "/stage-instances/#{channel_id}")
+    end
+
+    def edit_stage_instance(channel_id, topic: nil, privacy_level: nil)
+      body = {}
+      body[:topic] = topic if topic
+      body[:privacy_level] = privacy_level if privacy_level
+      request(:patch, "/stage-instances/#{channel_id}", body: body)
+    end
+
+    def delete_stage_instance(channel_id)
+      request(:delete, "/stage-instances/#{channel_id}")
     end
 
     def create_dm_channel(user_id)
@@ -258,7 +532,26 @@ module DiscordRuby
       request(:delete, path)
     end
 
+    def edit_application_command(application_id, command_id, data, guild_id: nil)
+      path = guild_id ? "/applications/#{application_id}/guilds/#{guild_id}/commands/#{command_id}" : "/applications/#{application_id}/commands/#{command_id}"
+      request(:patch, path, body: data)
+    end
+
+    def bulk_overwrite_global_application_commands(application_id, commands)
+      request(:put, "/applications/#{application_id}/commands", body: commands)
+    end
+
+    def bulk_overwrite_guild_application_commands(application_id, guild_id, commands)
+      request(:put, "/applications/#{application_id}/guilds/#{guild_id}/commands", body: commands)
+    end
+
     def create_interaction_response(interaction_id, token, type, data = {})
+      if data[:embeds]
+        data[:embeds] = data[:embeds].map { |e| e.respond_to?(:to_h) ? e.to_h : e }
+      end
+      if data[:components]
+        data[:components] = data[:components].map { |c| c.respond_to?(:to_h) ? c.to_h : c }
+      end
       request(:post, "/interactions/#{interaction_id}/#{token}/callback", body: {type: type, data: data})
     end
 
@@ -302,6 +595,7 @@ module DiscordRuby
       body = response.body && !response.body.empty? ? JSON.parse(response.body) : {}
 
       if response.code.to_i >= 400
+        warn "[ERROR] Discord API error #{response.code}: #{body.inspect}"
         raise "Discord API error #{response.code}: #{body.inspect}"
       end
 

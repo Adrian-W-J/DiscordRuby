@@ -2,6 +2,7 @@ require 'websocket-client-simple'
 require 'thread'
 require 'json'
 require 'rbconfig'
+require 'securerandom'
 
 module DiscordRuby
   class Gateway
@@ -25,39 +26,49 @@ module DiscordRuby
     end
 
     def on(event, &block)
-      @handlers[event.to_s] << block
+      handler_id = SecureRandom.uuid
+      @handlers[event.to_s] << { id: handler_id, block: block }
+      handler_id
+    end
+
+    def off(event, handler_id)
+      @handlers[event.to_s].reject! { |h| h[:id] == handler_id }
     end
 
     def run
       connect
-      loop { sleep 1 }
+      @running = true
+      while @running
+        sleep 1
+      end
     end
 
     def connect
       return if @connected
 
+      gateway = self
       @socket = WebSocket::Client::Simple.connect(@gateway_url)
       @socket.on :message do |message|
-        handle_message(message.data)
+        gateway.handle_message(message.data)
       rescue StandardError => error
-        dispatch('error', error)
+        gateway.dispatch('error', error)
       end
 
       @socket.on :open do
-        @connected = true
-        @reconnect_delay = 1
-        dispatch('open', nil)
+        gateway.instance_variable_set(:@connected, true)
+        gateway.instance_variable_set(:@reconnect_delay, 1)
+        gateway.dispatch('open', nil)
       end
 
       @socket.on :error do |error|
-        dispatch('error', error)
+        gateway.dispatch('error', error)
       end
 
       @socket.on :close do |event|
-        @connected = false
-        dispatch('close', event)
-        stop_heartbeat
-        try_reconnect
+        gateway.instance_variable_set(:@connected, false)
+        gateway.dispatch('close', event)
+        gateway.stop_heartbeat
+        gateway.try_reconnect
       end
     end
 
@@ -68,6 +79,7 @@ module DiscordRuby
     end
 
     def handle_message(raw)
+      puts "[DEBUG] Received raw message: #{raw}" if ENV['DEBUG']
       payload = JSON.parse(raw)
       @sequence = payload['s'] if payload.key?('s') && !payload['s'].nil?
 
@@ -113,6 +125,13 @@ module DiscordRuby
     end
 
     def handle_dispatch(event_name, data)
+      if ENV['DEBUG']
+        if event_name == 'MESSAGE_CREATE'
+          puts "[DEBUG] Handling dispatch: MESSAGE_CREATE - Content: #{data['content']}"
+        else
+          puts "[DEBUG] Handling dispatch: #{event_name}"
+        end
+      end
       case event_name
       when 'READY'
         @session_id = data['session_id']
@@ -180,6 +199,13 @@ module DiscordRuby
       @heartbeat_thread = nil
     end
 
+    def disconnect
+      @running = false
+      @socket.close if @socket
+      @connected = false
+      stop_heartbeat
+    end
+
     def restart
       stop_heartbeat
       @socket.close if @socket
@@ -197,10 +223,11 @@ module DiscordRuby
     end
 
     def dispatch(event_name, data)
-      @handlers[event_name.to_s].each do |callback|
+      puts "[DEBUG] Dispatching event: #{event_name}" if ENV['DEBUG']
+      @handlers[event_name.to_s].each do |handler|
         Thread.new do
           begin
-            callback.call(data)
+            handler[:block].call(data)
           rescue StandardError => error
             dispatch('error', error)
           end
@@ -209,7 +236,7 @@ module DiscordRuby
     end
 
     def identify_payload
-      {
+      payload = {
         token: @token,
         intents: @intents,
         properties: {
@@ -218,6 +245,8 @@ module DiscordRuby
           '$device' => 'discord_ruby'
         }
       }
+      puts "[DEBUG] Identify payload: #{payload.inspect}" if ENV['DEBUG']
+      payload
     end
   end
 end

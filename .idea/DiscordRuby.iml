@@ -13,6 +13,9 @@
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="library" scope="PROVIDED" name="base64 (v0.3.0, ruby-4.0.3-p0) [gem]" level="application" />
     <orderEntry type="library" scope="PROVIDED" name="bundler (v4.0.6, ruby-4.0.3-p0) [gem]" level="application" />
+    <orderEntry type="library" scope="PROVIDED" name="event_emitter (v0.2.6, ruby-4.0.3-p0) [gem]" level="application" />
     <orderEntry type="library" scope="PROVIDED" name="mutex_m (v0.3.0, ruby-4.0.3-p0) [gem]" level="application" />
+    <orderEntry type="library" scope="PROVIDED" name="websocket (v1.2.11, ruby-4.0.3-p0) [gem]" level="application" />
+    <orderEntry type="library" scope="PROVIDED" name="websocket-client-simple (v0.9.0, ruby-4.0.3-p0) [gem]" level="application" />
   </component>
 </module>

@@ -110,4 +110,142 @@ module DiscordRuby
       ACTIVE_DEVELOPER = 1 << 22
     end
   end
+
+  class BaseInteraction
+    attr_reader :bot, :id, :application_id, :type, :data, :guild_id, :channel_id, :member, :user, :token, :version, :app_permissions, :locale, :guild_locale, :entitlements
+
+    def initialize(bot, payload)
+      @bot = bot
+      @id = payload['id']
+      @application_id = payload['application_id']
+      @type = payload['type']
+      @data = payload['data']
+      @guild_id = payload['guild_id']
+      @channel_id = payload['channel_id']
+      @token = payload['token']
+      @version = payload['version']
+      @member = Member.new(bot, payload['member'].merge('guild_id' => @guild_id)) if payload['member']
+      @user = User.new(bot, payload['user'] || payload.dig('member', 'user'))
+      @app_permissions = Permissions.new(payload['app_permissions']) if payload['app_permissions']
+      @replied = false
+      @deferred = false
+    end
+
+    def reply(content: nil, embeds: [], components: [], flags: nil, ephemeral: false, poll: nil)
+      raise "Interaction already replied to" if @replied
+      
+      flags ||= 0
+      flags |= Interaction::MessageFlags::EPHEMERAL if ephemeral
+
+      data = { content: content }
+      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } unless embeds.empty?
+      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } unless components.empty?
+      data[:flags] = flags if flags > 0
+      data[:poll] = poll if poll
+
+      @bot.respond_to_interaction(@id, @token, Interaction::ResponseType::CHANNEL_MESSAGE_WITH_SOURCE, data)
+      @replied = true
+    end
+
+    def defer_reply(ephemeral: false)
+      raise "Interaction already replied to" if @replied
+      
+      flags = ephemeral ? Interaction::MessageFlags::EPHEMERAL : 0
+      @bot.respond_to_interaction(@id, @token, Interaction::ResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, { flags: flags })
+      @deferred = true
+      @replied = true
+    end
+
+    def edit_reply(content: nil, embeds: [], components: [], flags: nil)
+      data = { content: content }
+      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } unless embeds.empty?
+      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } unless components.empty?
+      data[:flags] = flags if flags
+
+      @bot.edit_original_interaction_response(@application_id, @token, data)
+    end
+
+    def follow_up(content: nil, embeds: [], components: [], flags: nil, ephemeral: false, poll: nil)
+      flags ||= 0
+      flags |= Interaction::MessageFlags::EPHEMERAL if ephemeral
+
+      data = { content: content }
+      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } unless embeds.empty?
+      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } unless components.empty?
+      data[:flags] = flags if flags > 0
+      data[:poll] = poll if poll
+
+      @bot.create_followup_message(@application_id, @token, data)
+    end
+
+    def delete_reply
+      @bot.delete_original_interaction_response(@application_id, @token)
+    end
+
+    def show_modal(modal)
+      raise "Interaction already replied to" if @replied
+      @bot.create_modal_response(@id, @token, modal)
+      @replied = true
+    end
+  end
+
+  class CommandInteraction < BaseInteraction
+    attr_reader :command_name, :options
+
+    def initialize(bot, payload)
+      super
+      @command_name = @data['name']
+      @options = @data['options'] || []
+    end
+
+    def get_option(name)
+      @options.find { |opt| opt['name'] == name }&.fetch('value', nil)
+    end
+  end
+
+  class MessageComponentInteraction < BaseInteraction
+    attr_reader :custom_id, :component_type, :values, :message
+
+    def initialize(bot, payload)
+      super
+      @custom_id = @data['custom_id']
+      @component_type = @data['component_type']
+      @values = @data['values'] || []
+      @message = Message.new(bot, payload['message']) if payload['message']
+    end
+
+    def update(content: nil, embeds: [], components: [], flags: nil)
+      raise "Interaction already replied to" if @replied
+      
+      data = { content: content }
+      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } unless embeds.empty?
+      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } unless components.empty?
+      data[:flags] = flags if flags
+
+      @bot.respond_to_interaction(@id, @token, Interaction::ResponseType::UPDATE_MESSAGE, data)
+      @replied = true
+    end
+
+    def defer_update
+      raise "Interaction already replied to" if @replied
+      @bot.respond_to_interaction(@id, @token, Interaction::ResponseType::DEFERRED_UPDATE_MESSAGE)
+      @deferred = true
+      @replied = true
+    end
+  end
+
+  class ModalSubmitInteraction < BaseInteraction
+    attr_reader :custom_id, :fields
+
+    def initialize(bot, payload)
+      super
+      @custom_id = @data['custom_id']
+      @fields = {}
+      @data['components'].each do |row|
+        row['components'].each do |component|
+          @fields[component['custom_id']] = component['value']
+        end
+      end
+    end
+  end
 end

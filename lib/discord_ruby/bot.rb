@@ -65,11 +65,15 @@ module DiscordRuby
     end
 
     def on_message(&block)
-      on('MESSAGE_CREATE', &block)
+      on('MESSAGE_CREATE') do |payload|
+        block.call(Message.new(self, payload))
+      end
     end
 
     def on_message_update(&block)
-      on('MESSAGE_UPDATE', &block)
+      on('MESSAGE_UPDATE') do |payload|
+        block.call(Message.new(self, payload))
+      end
     end
 
     def on_message_delete(&block)
@@ -77,11 +81,17 @@ module DiscordRuby
     end
 
     def on_guild_create(&block)
-      on('GUILD_CREATE', &block)
+      on('GUILD_CREATE') do |payload|
+        guild = Guild.new(self, payload)
+        @guilds.set(guild.id, guild)
+        block.call(guild)
+      end
     end
 
     def on_guild_update(&block)
-      on('GUILD_UPDATE', &block)
+      on('GUILD_UPDATE') do |payload|
+        block.call(Guild.new(self, payload))
+      end
     end
 
     def on_guild_delete(&block)
@@ -89,15 +99,21 @@ module DiscordRuby
     end
 
     def on_member_add(&block)
-      on('GUILD_MEMBER_ADD', &block)
+      on('GUILD_MEMBER_ADD') do |payload|
+        block.call(Member.new(self, payload))
+      end
     end
 
     def on_member_update(&block)
-      on('GUILD_MEMBER_UPDATE', &block)
+      on('GUILD_MEMBER_UPDATE') do |payload|
+        block.call(Member.new(self, payload))
+      end
     end
 
     def on_member_remove(&block)
-      on('GUILD_MEMBER_REMOVE', &block)
+      on('GUILD_MEMBER_REMOVE') do |payload|
+        block.call(Member.new(self, payload))
+      end
     end
 
     def on_reaction_add(&block)
@@ -129,15 +145,21 @@ module DiscordRuby
     end
 
     def on_thread_create(&block)
-      on('THREAD_CREATE', &block)
+      on('THREAD_CREATE') do |payload|
+        block.call(Channel.new(self, payload))
+      end
     end
 
     def on_thread_update(&block)
-      on('THREAD_UPDATE', &block)
+      on('THREAD_UPDATE') do |payload|
+        block.call(Channel.new(self, payload))
+      end
     end
 
     def on_thread_delete(&block)
-      on('THREAD_DELETE', &block)
+      on('THREAD_DELETE') do |payload|
+        block.call(Channel.new(self, payload))
+      end
     end
 
     def on_thread_list_sync(&block)
@@ -173,27 +195,55 @@ module DiscordRuby
     end
 
     def on_guild_role_create(&block)
-      on('GUILD_ROLE_CREATE', &block)
+      on('GUILD_ROLE_CREATE') do |payload|
+        block.call(Role.new(self, payload['role'].merge('guild_id' => payload['guild_id'])))
+      end
     end
 
     def on_guild_role_update(&block)
-      on('GUILD_ROLE_UPDATE', &block)
+      on('GUILD_ROLE_UPDATE') do |payload|
+        block.call(Role.new(self, payload['role'].merge('guild_id' => payload['guild_id'])))
+      end
     end
 
     def on_guild_role_delete(&block)
       on('GUILD_ROLE_DELETE', &block)
     end
 
+    def on_channel_create(&block)
+      on('CHANNEL_CREATE') do |payload|
+        block.call(Channel.new(self, payload))
+      end
+    end
+
+    def on_channel_update(&block)
+      on('CHANNEL_UPDATE') do |payload|
+        block.call(Channel.new(self, payload))
+      end
+    end
+
+    def on_channel_delete(&block)
+      on('CHANNEL_DELETE') do |payload|
+        block.call(Channel.new(self, payload))
+      end
+    end
+
     def on_guild_scheduled_event_create(&block)
-      on('GUILD_SCHEDULED_EVENT_CREATE', &block)
+      on('GUILD_SCHEDULED_EVENT_CREATE') do |payload|
+        block.call(ScheduledEvent.new(self, payload))
+      end
     end
 
     def on_guild_scheduled_event_update(&block)
-      on('GUILD_SCHEDULED_EVENT_UPDATE', &block)
+      on('GUILD_SCHEDULED_EVENT_UPDATE') do |payload|
+        block.call(ScheduledEvent.new(self, payload))
+      end
     end
 
     def on_guild_scheduled_event_delete(&block)
-      on('GUILD_SCHEDULED_EVENT_DELETE', &block)
+      on('GUILD_SCHEDULED_EVENT_DELETE') do |payload|
+        block.call(ScheduledEvent.new(self, payload))
+      end
     end
 
     def on_guild_scheduled_event_user_add(&block)
@@ -225,19 +275,27 @@ module DiscordRuby
     end
 
     def on_presence_update(&block)
-      on('PRESENCE_UPDATE', &block)
+      on('PRESENCE_UPDATE') do |payload|
+        block.call(Presence.new(self, payload))
+      end
     end
 
     def on_stage_instance_create(&block)
-      on('STAGE_INSTANCE_CREATE', &block)
+      on('STAGE_INSTANCE_CREATE') do |payload|
+        block.call(StageInstance.new(self, payload))
+      end
     end
 
     def on_stage_instance_update(&block)
-      on('STAGE_INSTANCE_UPDATE', &block)
+      on('STAGE_INSTANCE_UPDATE') do |payload|
+        block.call(StageInstance.new(self, payload))
+      end
     end
 
     def on_stage_instance_delete(&block)
-      on('STAGE_INSTANCE_DELETE', &block)
+      on('STAGE_INSTANCE_DELETE') do |payload|
+        block.call(StageInstance.new(self, payload))
+      end
     end
 
     def on_webhooks_update(&block)
@@ -312,16 +370,33 @@ module DiscordRuby
       create_followup_message(@application_id, interaction_token, data)
     end
 
+    def set_presence(status: 'online', activities: [], afk: false, since: nil)
+      @gateway.send_presence(status: status, activities: activities, afk: afk, since: since)
+    end
+
+    def set_status(status)
+      set_presence(status: status)
+    end
+
+    def set_activity(name, type: 0, url: nil)
+      set_presence(activities: [{ name: name, type: type, url: url }.compact])
+    end
+
     def create_dm_channel(user_id)
       super(user_id)
     end
 
-    def reply(event, content:, embeds: [], components: [], flags: nil)
+    def reply(event, content: nil, embeds: [], components: [], flags: nil, poll: nil)
       data = {content: content}
-      data[:embeds] = embeds if embeds && !embeds.empty?
-      data[:components] = components if components && !components.empty?
+      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } if embeds && !embeds.empty?
+      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } if components && !components.empty?
       data[:flags] = flags if flags
-      respond_to_interaction(event['id'], event['token'], Interaction::ResponseType::CHANNEL_MESSAGE_WITH_SOURCE, data)
+      data[:poll] = poll if poll
+      
+      interaction_id = event.respond_to?(:id) ? event.id : event['id']
+      interaction_token = event.respond_to?(:token) ? event.token : event['token']
+      
+      respond_to_interaction(interaction_id, interaction_token, Interaction::ResponseType::CHANNEL_MESSAGE_WITH_SOURCE, data)
     end
 
     private
@@ -341,26 +416,31 @@ module DiscordRuby
       puts "[DEBUG] Handling interaction: #{payload['type']} (Name: #{payload.dig('data', 'name') || payload.dig('data', 'custom_id')})" if ENV['DEBUG']
       @current_interaction_token = payload['token']
 
+      interaction = case payload['type']
+                    when Interaction::InteractionType::APPLICATION_COMMAND
+                      CommandInteraction.new(self, payload)
+                    when Interaction::InteractionType::MESSAGE_COMPONENT
+                      MessageComponentInteraction.new(self, payload)
+                    when Interaction::InteractionType::MODAL_SUBMIT
+                      ModalSubmitInteraction.new(self, payload)
+                    else
+                      BaseInteraction.new(self, payload)
+                    end
+
       @interaction_handlers.each do |handler|
-        handler[:block].call(payload)
+        handler[:block].call(interaction)
       rescue StandardError => error
         dispatch_error(error)
       end
 
-      case payload['type']
-      when Interaction::InteractionType::APPLICATION_COMMAND
-        command_name = payload.dig('data', 'name')
-        puts "[DEBUG] Dispatching command: #{command_name}" if ENV['DEBUG']
-        @command_registry.dispatch(command_name, payload)
-      when Interaction::InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE
-        command_name = payload.dig('data', 'name')
-        @autocomplete_registry.dispatch(command_name, payload)
-      when Interaction::InteractionType::MESSAGE_COMPONENT
-        custom_id = payload.dig('data', 'custom_id')
-        @component_handlers[custom_id].each { |handler| handler.call(payload) }
-      when Interaction::InteractionType::MODAL_SUBMIT
-        custom_id = payload.dig('data', 'custom_id')
-        @modal_handlers[custom_id].each { |handler| handler.call(payload) }
+      case interaction
+      when CommandInteraction
+        puts "[DEBUG] Dispatching command: #{interaction.command_name}" if ENV['DEBUG']
+        @command_registry.dispatch(interaction.command_name, interaction)
+      when MessageComponentInteraction
+        @component_handlers[interaction.custom_id].each { |handler| handler.call(interaction) }
+      when ModalSubmitInteraction
+        @modal_handlers[interaction.custom_id].each { |handler| handler.call(interaction) }
       end
     rescue StandardError => error
       dispatch_error(error)

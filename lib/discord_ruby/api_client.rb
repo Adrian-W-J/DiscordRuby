@@ -48,7 +48,8 @@ module DiscordRuby
     end
 
     def fetch_user(user_id)
-      request(:get, "/users/#{user_id}")
+      data = request(:get, "/users/#{user_id}")
+      User.new(self, data)
     end
 
     def modify_current_user(username: nil, avatar: nil)
@@ -59,7 +60,8 @@ module DiscordRuby
     end
 
     def fetch_channel(channel_id)
-      request(:get, "/channels/#{channel_id}")
+      data = request(:get, "/channels/#{channel_id}")
+      Channel.new(self, data)
     end
 
     def fetch_channel_messages(channel_id, limit: 50, before: nil, after: nil, around: nil)
@@ -70,15 +72,19 @@ module DiscordRuby
       request(:get, "/channels/#{channel_id}/messages", params: params)
     end
 
-    def send_message(channel_id, content, **options)
-      raise ArgumentError, 'Message content cannot be blank' if content.nil? || content.to_s.strip.empty?
-
-      body = {content: content}
+    def send_message(channel_id, content = nil, **options)
+      body = {}
+      body[:content] = content if content
       body[:tts] = options[:tts] if options.key?(:tts)
       body[:embeds] = options[:embeds].map { |e| e.respond_to?(:to_h) ? e.to_h : e } if options.key?(:embeds) && options[:embeds]
       body[:components] = options[:components].map { |c| c.respond_to?(:to_h) ? c.to_h : c } if options.key?(:components) && options[:components]
       body[:flags] = options[:flags] if options.key?(:flags)
-      request(:post, "/channels/#{channel_id}/messages", body: body)
+      body[:poll] = options[:poll] if options.key?(:poll)
+      body[:message_reference] = options[:message_reference] if options.key?(:message_reference)
+      body[:sticker_ids] = options[:sticker_ids] if options.key?(:sticker_ids)
+
+      data = request(:post, "/channels/#{channel_id}/messages", body: body)
+      Message.new(self, data)
     end
 
     def edit_message(channel_id, message_id, content: nil, **options)
@@ -88,6 +94,19 @@ module DiscordRuby
       body[:components] = options[:components].map { |c| c.respond_to?(:to_h) ? c.to_h : c } if options.key?(:components) && options[:components]
       body[:flags] = options[:flags] if options.key?(:flags)
       request(:patch, "/channels/#{channel_id}/messages/#{message_id}", body: body)
+    end
+
+    def pin_message(channel_id, message_id)
+      request(:put, "/channels/#{channel_id}/pins/#{message_id}")
+    end
+
+    def unpin_message(channel_id, message_id)
+      request(:delete, "/channels/#{channel_id}/pins/#{message_id}")
+    end
+
+    def fetch_pinned_messages(channel_id)
+      data = request(:get, "/channels/#{channel_id}/pins")
+      data.map { |m| Message.new(self, m) }
     end
 
     def delete_message(channel_id, message_id)
@@ -136,7 +155,8 @@ module DiscordRuby
     end
 
     def fetch_guild(guild_id)
-      request(:get, "/guilds/#{guild_id}")
+      data = request(:get, "/guilds/#{guild_id}")
+      Guild.new(self, data)
     end
 
     def edit_guild(guild_id, **options)
@@ -148,34 +168,68 @@ module DiscordRuby
     end
 
     def fetch_guild_channels(guild_id)
-      request(:get, "/guilds/#{guild_id}/channels")
+      data = request(:get, "/guilds/#{guild_id}/channels")
+      data.map { |c| Channel.new(self, c) }
     end
 
     def create_guild_channel(guild_id, name, type, **options)
-      request(:post, "/guilds/#{guild_id}/channels", body: options.merge(name: name, type: type))
+      data = request(:post, "/guilds/#{guild_id}/channels", body: options.merge(name: name, type: type))
+      Channel.new(self, data)
     end
 
     def fetch_guild_member(guild_id, user_id)
-      request(:get, "/guilds/#{guild_id}/members/#{user_id}")
+      data = request(:get, "/guilds/#{guild_id}/members/#{user_id}")
+      Member.new(self, data.merge('guild_id' => guild_id))
     end
 
     def list_guild_members(guild_id, limit: 1000, after: nil)
       params = {limit: limit}
       params[:after] = after if after
-      request(:get, "/guilds/#{guild_id}/members", params: params)
+      data = request(:get, "/guilds/#{guild_id}/members", params: params)
+      data.map { |m| Member.new(self, m.merge('guild_id' => guild_id)) }
     end
 
     def add_guild_member(guild_id, user_id, access_token:, **options)
       body = {access_token: access_token}.merge(options)
-      request(:put, "/guilds/#{guild_id}/members/#{user_id}", body: body)
+      data = request(:put, "/guilds/#{guild_id}/members/#{user_id}", body: body)
+      data ? Member.new(self, data.merge('guild_id' => guild_id)) : nil
     end
 
     def modify_guild_member(guild_id, user_id, **options)
-      request(:patch, "/guilds/#{guild_id}/members/#{user_id}", body: options)
+      data = request(:patch, "/guilds/#{guild_id}/members/#{user_id}", body: options)
+      Member.new(self, data.merge('guild_id' => guild_id))
     end
 
-    def remove_guild_member(guild_id, user_id)
-      request(:delete, "/guilds/#{guild_id}/members/#{user_id}")
+    def remove_guild_member(guild_id, user_id, reason: nil)
+      headers = reason ? {'X-Audit-Log-Reason' => reason} : {}
+      request(:delete, "/guilds/#{guild_id}/members/#{user_id}", headers: headers)
+    end
+
+    def create_guild_ban(guild_id, user_id, delete_message_days: 0, reason: nil)
+      headers = reason ? {'X-Audit-Log-Reason' => reason} : {}
+      request(:put, "/guilds/#{guild_id}/bans/#{user_id}", body: {delete_message_days: delete_message_days}, headers: headers)
+    end
+
+    def remove_guild_ban(guild_id, user_id, reason: nil)
+      headers = reason ? {'X-Audit-Log-Reason' => reason} : {}
+      request(:delete, "/guilds/#{guild_id}/bans/#{user_id}", headers: headers)
+    end
+
+    def leave_guild(guild_id)
+      request(:delete, "/users/@me/guilds/#{guild_id}")
+    end
+
+    def get_guild_prune_count(guild_id, days: 7, include_roles: nil)
+      params = {days: days}
+      params[:include_roles] = include_roles.join(',') if include_roles
+      request(:get, "/guilds/#{guild_id}/prune", params: params)
+    end
+
+    def begin_guild_prune(guild_id, days: 7, compute_prune_count: true, include_roles: nil, reason: nil)
+      body = {days: days, compute_prune_count: compute_prune_count}
+      body[:include_roles] = include_roles if include_roles
+      headers = reason ? {'X-Audit-Log-Reason' => reason} : {}
+      request(:post, "/guilds/#{guild_id}/prune", body: body, headers: headers)
     end
 
     def add_guild_member_role(guild_id, user_id, role_id, reason: nil)
@@ -189,15 +243,18 @@ module DiscordRuby
     end
 
     def fetch_guild_roles(guild_id)
-      request(:get, "/guilds/#{guild_id}/roles")
+      data = request(:get, "/guilds/#{guild_id}/roles")
+      data.map { |r| Role.new(self, r.merge('guild_id' => guild_id)) }
     end
 
     def create_guild_role(guild_id, **options)
-      request(:post, "/guilds/#{guild_id}/roles", body: options)
+      data = request(:post, "/guilds/#{guild_id}/roles", body: options)
+      Role.new(self, data.merge('guild_id' => guild_id))
     end
 
     def edit_guild_role(guild_id, role_id, **options)
-      request(:patch, "/guilds/#{guild_id}/roles/#{role_id}", body: options)
+      data = request(:patch, "/guilds/#{guild_id}/roles/#{role_id}", body: options)
+      Role.new(self, data.merge('guild_id' => guild_id))
     end
 
     def delete_guild_role(guild_id, role_id)
@@ -205,15 +262,18 @@ module DiscordRuby
     end
 
     def fetch_guild_emojis(guild_id)
-      request(:get, "/guilds/#{guild_id}/emojis")
+      data = request(:get, "/guilds/#{guild_id}/emojis")
+      data.map { |e| Emoji.new(self, e) }
     end
 
     def create_guild_emoji(guild_id, name:, image:, **options)
-      request(:post, "/guilds/#{guild_id}/emojis", body: options.merge(name: name, image: image))
+      data = request(:post, "/guilds/#{guild_id}/emojis", body: options.merge(name: name, image: image))
+      Emoji.new(self, data)
     end
 
     def edit_guild_emoji(guild_id, emoji_id, **options)
-      request(:patch, "/guilds/#{guild_id}/emojis/#{emoji_id}", body: options)
+      data = request(:patch, "/guilds/#{guild_id}/emojis/#{emoji_id}", body: options)
+      Emoji.new(self, data)
     end
 
     def delete_guild_emoji(guild_id, emoji_id)
@@ -221,11 +281,13 @@ module DiscordRuby
     end
 
     def fetch_guild_stickers(guild_id)
-      request(:get, "/guilds/#{guild_id}/stickers")
+      data = request(:get, "/guilds/#{guild_id}/stickers")
+      data.map { |s| Sticker.new(self, s.merge('guild_id' => guild_id)) }
     end
 
     def fetch_guild_sticker(guild_id, sticker_id)
-      request(:get, "/guilds/#{guild_id}/stickers/#{sticker_id}")
+      data = request(:get, "/guilds/#{guild_id}/stickers/#{sticker_id}")
+      Sticker.new(self, data.merge('guild_id' => guild_id))
     end
 
     def create_guild_sticker(guild_id, name:, description:, tags:, file:, **options)

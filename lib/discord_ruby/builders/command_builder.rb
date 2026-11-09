@@ -60,7 +60,7 @@ module DiscordRuby
         option[:max_value] = max_value if max_value
         option[:min_length] = min_length if min_length
         option[:max_length] = max_length if max_length
-        
+
         @data[:options] << option
         self
       end

@@ -57,7 +57,7 @@ module DiscordRuby
 
     def on_ready(&block)
       on('READY') do |payload|
-        # Ensure application_id is set before calling the block
+
         @application_id = payload.dig('application', 'id')
         @ready = true
         block.call(payload)
@@ -96,6 +96,26 @@ module DiscordRuby
 
     def on_guild_delete(&block)
       on('GUILD_DELETE', &block)
+    end
+
+    def on_entitlement_create(&block)
+      on('ENTITLEMENT_CREATE', &block)
+    end
+
+    def on_entitlement_update(&block)
+      on('ENTITLEMENT_UPDATE', &block)
+    end
+
+    def on_entitlement_delete(&block)
+      on('ENTITLEMENT_DELETE', &block)
+    end
+
+    def on_poll_vote_add(&block)
+      on('MESSAGE_POLL_VOTE_ADD', &block)
+    end
+
+    def on_poll_vote_remove(&block)
+      on('MESSAGE_POLL_VOTE_REMOVE', &block)
     end
 
     def on_member_add(&block)
@@ -386,17 +406,11 @@ module DiscordRuby
       super(user_id)
     end
 
-    def reply(event, content: nil, embeds: [], components: [], flags: nil, poll: nil)
-      data = {content: content}
-      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } if embeds && !embeds.empty?
-      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } if components && !components.empty?
-      data[:flags] = flags if flags
-      data[:poll] = poll if poll
-      
+    def reply(event, **data)
       interaction_id = event.respond_to?(:id) ? event.id : event['id']
       interaction_token = event.respond_to?(:token) ? event.token : event['token']
-      
-      respond_to_interaction(interaction_id, interaction_token, Interaction::ResponseType::CHANNEL_MESSAGE_WITH_SOURCE, data)
+
+      respond_to_interaction(interaction_id, interaction_token, Interaction::ResponseType::CHANNEL_MESSAGE_WITH_SOURCE, data.compact)
     end
 
     private
@@ -413,19 +427,9 @@ module DiscordRuby
     end
 
     def handle_interaction_create(payload)
-      puts "[DEBUG] Handling interaction: #{payload['type']} (Name: #{payload.dig('data', 'name') || payload.dig('data', 'custom_id')})" if ENV['DEBUG']
       @current_interaction_token = payload['token']
 
-      interaction = case payload['type']
-                    when Interaction::InteractionType::APPLICATION_COMMAND
-                      CommandInteraction.new(self, payload)
-                    when Interaction::InteractionType::MESSAGE_COMPONENT
-                      MessageComponentInteraction.new(self, payload)
-                    when Interaction::InteractionType::MODAL_SUBMIT
-                      ModalSubmitInteraction.new(self, payload)
-                    else
-                      BaseInteraction.new(self, payload)
-                    end
+      interaction = Interaction.from_data(self, payload)
 
       @interaction_handlers.each do |handler|
         handler[:block].call(interaction)
@@ -435,12 +439,11 @@ module DiscordRuby
 
       case interaction
       when CommandInteraction
-        puts "[DEBUG] Dispatching command: #{interaction.command_name}" if ENV['DEBUG']
         @command_registry.dispatch(interaction.command_name, interaction)
       when MessageComponentInteraction
-        @component_handlers[interaction.custom_id].each { |handler| handler.call(interaction) }
+        @component_handlers[interaction.custom_id.to_s].each { |handler| handler.call(interaction) }
       when ModalSubmitInteraction
-        @modal_handlers[interaction.custom_id].each { |handler| handler.call(interaction) }
+        @modal_handlers[interaction.custom_id.to_s].each { |handler| handler.call(interaction) }
       end
     rescue StandardError => error
       dispatch_error(error)

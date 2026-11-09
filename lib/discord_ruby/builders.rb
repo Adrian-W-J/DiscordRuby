@@ -73,6 +73,19 @@ module DiscordRuby
         self
       end
 
+      def add_component(component)
+        @data[:components] << component.to_h
+        self
+      end
+
+      def text_display(content)
+        add_component(Component::TextDisplay.new(content))
+      end
+
+      def container(**options, &block)
+        add_component(Component::Container.build(**options, &block))
+      end
+
       def add_select(custom_id:, type: :string, options: [], placeholder: nil, min_values: 1, max_values: 1, disabled: false)
         component = case type
                     when :string then Component::StringSelectMenu.new(custom_id: custom_id, options: options, placeholder: placeholder, min_values: min_values, max_values: max_values, disabled: disabled)
@@ -81,7 +94,7 @@ module DiscordRuby
                     when :mentionable then Component::MentionableSelectMenu.new(custom_id: custom_id, placeholder: placeholder, min_values: min_values, max_values: max_values, disabled: disabled)
                     when :channel then Component::ChannelSelectMenu.new(custom_id: custom_id, placeholder: placeholder, min_values: min_values, max_values: max_values, disabled: disabled)
                     end
-        
+
         row = @data[:components].last
         if row && row[:type] == Component::ActionRow::TYPE && row[:components].empty?
            row[:components] << component.to_h
@@ -121,7 +134,7 @@ module DiscordRuby
                     else style
                     end
         button = Component::Button.new(label: label, custom_id: custom_id, style: btn_style, url: url, emoji: emoji, disabled: disabled)
-        
+
         row = @data[:components].last
         if row && row[:type] == Component::ActionRow::TYPE && row[:components].size < 5 && row[:components].none? { |c| c[:type] >= 3 }
            row[:components] << button.to_h
@@ -132,7 +145,7 @@ module DiscordRuby
       end
 
       def ephemeral
-        @data[:flags] = 64
+        @data[:flags] = (@data[:flags] || 0) | Interaction::MessageFlags::EPHEMERAL
         self
       end
 
@@ -798,7 +811,7 @@ module DiscordRuby
       def add_text_input(label:, custom_id:, style: :short, placeholder: nil, min_length: nil, max_length: nil, required: true, value: nil)
         input_style = style == :paragraph ? Interaction::TextInputStyle::PARAGRAPH : Interaction::TextInputStyle::SHORT
         input = Component::TextInput.new(label: label, custom_id: custom_id, style: input_style, placeholder: placeholder, min_length: min_length, max_length: max_length, required: required, value: value)
-        
+
         row = Component::ActionRow.new
         row.add_component(input)
         @data[:components] << row.to_h

@@ -46,6 +46,7 @@ module DiscordRuby
     def connect
       return if @connected
 
+      puts "[DEBUG] Connecting to #{@gateway_url}..." if ENV['DEBUG']
       gateway = self
       @socket = WebSocket::Client::Simple.connect(@gateway_url)
       @socket.on :message do |message|
@@ -55,6 +56,7 @@ module DiscordRuby
       end
 
       @socket.on :open do
+        puts "[DEBUG] WebSocket connection opened" if ENV['DEBUG']
         gateway.instance_variable_set(:@connected, true)
         gateway.instance_variable_set(:@reconnect_delay, 1)
         gateway.dispatch('open', nil)
@@ -65,6 +67,7 @@ module DiscordRuby
       end
 
       @socket.on :close do |event|
+        puts "[DEBUG] WebSocket connection closed: #{event.inspect}" if ENV['DEBUG']
         gateway.instance_variable_set(:@connected, false)
         gateway.dispatch('close', event)
         gateway.stop_heartbeat
@@ -79,8 +82,20 @@ module DiscordRuby
     end
 
     def handle_message(raw)
-      puts "[DEBUG] Received raw message: #{raw}" if ENV['DEBUG']
-      payload = JSON.parse(raw)
+      begin
+        payload = JSON.parse(raw)
+      rescue JSON::ParserError => e
+        message = raw.strip
+        if message == "Authentication failed."
+          specific_error = "Authentication failed. Your token is likely invalid or has been reset."
+        else
+          specific_error = "Invalid gateway response (not JSON): #{message[0..100]}..."
+        end
+        warn "[ERROR] #{specific_error}"
+        dispatch('error', StandardError.new(specific_error))
+        return
+      end
+
       @sequence = payload['s'] if payload.key?('s') && !payload['s'].nil?
 
       case payload['op']
@@ -102,10 +117,13 @@ module DiscordRuby
 
     def handle_hello(data)
       @heartbeat_interval = data['heartbeat_interval'] / 1000.0
+      puts "[DEBUG] Hello received. Heartbeat interval: #{@heartbeat_interval}s" if ENV['DEBUG']
       start_heartbeat
       if @session_id
+        puts "[DEBUG] Resuming session: #{@session_id}" if ENV['DEBUG']
         resume
       else
+        puts "[DEBUG] Identifying..." if ENV['DEBUG']
         identify
       end
       dispatch('hello', data)
@@ -178,13 +196,18 @@ module DiscordRuby
     def start_heartbeat
       stop_heartbeat
       @heartbeat_thread = Thread.new do
+
+        sleep(@heartbeat_interval * rand)
         loop do
-          sleep(@heartbeat_interval)
           send_payload(1, @sequence)
           @last_heartbeat_ack = false
           dispatch('heartbeat', nil)
-          sleep(1)
+
+
+          sleep(@heartbeat_interval)
+
           unless @last_heartbeat_ack
+            puts "[GATEWAY] Heartbeat ACK not received, reconnecting..." if ENV['DEBUG']
             dispatch('heartbeat_timeout', nil)
             restart
             break
@@ -236,7 +259,7 @@ module DiscordRuby
     end
 
     def identify_payload
-      payload = {
+      {
         token: @token,
         intents: @intents,
         properties: {
@@ -245,8 +268,6 @@ module DiscordRuby
           '$device' => 'discord_ruby'
         }
       }
-      puts "[DEBUG] Identify payload: #{payload.inspect}" if ENV['DEBUG']
-      payload
     end
   end
 end

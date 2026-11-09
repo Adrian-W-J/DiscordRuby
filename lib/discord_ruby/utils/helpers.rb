@@ -13,7 +13,7 @@ module DiscordRuby
         hours = (seconds % 86400) / 3600
         minutes = (seconds % 3600) / 60
         secs = seconds % 60
-        
+
         parts = []
         parts << "#{days}d" if days > 0
         parts << "#{hours}h" if hours > 0

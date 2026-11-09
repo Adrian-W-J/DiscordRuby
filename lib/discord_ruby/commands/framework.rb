@@ -1,7 +1,7 @@
 module DiscordRuby
   module Commands
     class Command
-      attr_reader :name, :description, :options, :callback, :type
+      attr_reader :name, :description, :options, :callback, :type, :checks
 
       def initialize(name, description, options: [], type: 1, &callback)
         @name = name
@@ -9,9 +9,16 @@ module DiscordRuby
         @options = options
         @type = type
         @callback = callback
+        @checks = []
+      end
+
+      def add_check(&block)
+        @checks << block
+        self
       end
 
       def execute(interaction)
+        return unless @checks.all? { |check| check.call(interaction) }
         @callback.call(interaction)
       end
 
@@ -98,6 +105,24 @@ module DiscordRuby
       def register_command(name, description, **options, &block)
         command = Command.new(name, description, **options, &block)
         @registry.register(command)
+        command
+      end
+
+      def slash_command(name, description, &block)
+        builder = DiscordRuby::Builders::SlashCommandBuilder.new(name, description)
+        proxy = CommandProxy.new(builder)
+        yield proxy
+
+        command = Command.new(
+          builder.instance_variable_get(:@data)[:name],
+          builder.instance_variable_get(:@data)[:description],
+          options: builder.instance_variable_get(:@data)[:options] || [],
+          type: builder.instance_variable_get(:@data)[:type] || 1,
+          &proxy.callback
+        )
+        proxy.checks.each { |c| command.add_check(&c) }
+        @registry.register(command)
+        command
       end
 
       def setup_listeners
@@ -122,6 +147,32 @@ module DiscordRuby
         else
           @registry.sync_global
         end
+      end
+    end
+
+    class CommandProxy
+      attr_reader :builder, :callback, :checks
+
+      def initialize(builder)
+        @builder = builder
+        @callback = nil
+        @checks = []
+      end
+
+      def execute(&block)
+        @callback = block
+      end
+
+      def check(&block)
+        @checks << block
+      end
+
+      def method_missing(name, *args, **kwargs, &block)
+        @builder.send(name, *args, **kwargs, &block)
+      end
+
+      def respond_to_missing?(name, include_private = false)
+        @builder.respond_to?(name, include_private) || super
       end
     end
   end

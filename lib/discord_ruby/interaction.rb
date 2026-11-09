@@ -1,5 +1,21 @@
 module DiscordRuby
   module Interaction
+    def self.from_data(bot, payload)
+      case payload['type']
+      when InteractionType::APPLICATION_COMMAND
+        CommandInteraction.new(bot, payload)
+      when InteractionType::MESSAGE_COMPONENT
+        MessageComponentInteraction.new(bot, payload)
+      when InteractionType::MODAL_SUBMIT
+        ModalSubmitInteraction.new(bot, payload)
+      when InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE
+
+        BaseInteraction.new(bot, payload)
+      else
+        BaseInteraction.new(bot, payload)
+      end
+    end
+
     module ResponseType
       PONG = 1
       CHANNEL_MESSAGE_WITH_SOURCE = 4
@@ -8,6 +24,7 @@ module DiscordRuby
       UPDATE_MESSAGE = 7
       APPLICATION_COMMAND_AUTOCOMPLETE_RESULT = 8
       MODAL = 9
+      PREMIUM_REQUIRED = 10
     end
 
     module InteractionType
@@ -47,6 +64,14 @@ module DiscordRuby
       ROLE_SELECT = 6
       MENTIONABLE_SELECT = 7
       CHANNEL_SELECT = 8
+      SECTION = 9
+      TEXT_DISPLAY = 10
+      THUMBNAIL = 11
+      MEDIA_GALLERY = 12
+      FILE = 13
+      SEPARATOR = 14
+      CONTAINER = 17
+      LABEL = 18
     end
 
     module ButtonStyle
@@ -74,6 +99,7 @@ module DiscordRuby
       FAILED_TO_MENTION_SOME_ROLES_IN_THREAD = 1 << 8
       SUPPRESS_NOTIFICATIONS = 1 << 12
       IS_VOICE_MESSAGE = 1 << 13
+      IS_COMPONENTS_V2 = 1 << 15
     end
 
     module ChannelType
@@ -111,6 +137,22 @@ module DiscordRuby
     end
   end
 
+  def self.from_data(bot, payload)
+    case payload['type']
+    when InteractionType::APPLICATION_COMMAND
+      CommandInteraction.new(bot, payload)
+    when InteractionType::MESSAGE_COMPONENT
+      MessageComponentInteraction.new(bot, payload)
+    when InteractionType::MODAL_SUBMIT
+      ModalSubmitInteraction.new(bot, payload)
+    when InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE
+
+      BaseInteraction.new(bot, payload)
+    else
+      BaseInteraction.new(bot, payload)
+    end
+  end
+
   class BaseInteraction
     attr_reader :bot, :id, :application_id, :type, :data, :guild_id, :channel_id, :member, :user, :token, :version, :app_permissions, :locale, :guild_locale, :entitlements
 
@@ -131,51 +173,44 @@ module DiscordRuby
       @deferred = false
     end
 
-    def reply(content: nil, embeds: [], components: [], flags: nil, ephemeral: false, poll: nil)
+    def replied?
+      @replied
+    end
+
+    def deferred?
+      @deferred
+    end
+
+    def fetch_reply
+      @bot.get_original_interaction_response(@application_id, @token)
+    end
+
+    def reply(ephemeral: false, flags: nil, **data)
       raise "Interaction already replied to" if @replied
-      
-      flags ||= 0
-      flags |= Interaction::MessageFlags::EPHEMERAL if ephemeral
 
-      data = { content: content }
-      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } unless embeds.empty?
-      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } unless components.empty?
-      data[:flags] = flags if flags > 0
-      data[:poll] = poll if poll
-
-      @bot.respond_to_interaction(@id, @token, Interaction::ResponseType::CHANNEL_MESSAGE_WITH_SOURCE, data)
+      data[:flags] = (flags || 0) | Interaction::MessageFlags::EPHEMERAL if ephemeral
+      data[:flags] = flags if flags && !ephemeral
+      @bot.respond_to_interaction(@id, @token, Interaction::ResponseType::CHANNEL_MESSAGE_WITH_SOURCE, data.compact)
       @replied = true
     end
 
     def defer_reply(ephemeral: false)
       raise "Interaction already replied to" if @replied
-      
+
       flags = ephemeral ? Interaction::MessageFlags::EPHEMERAL : 0
       @bot.respond_to_interaction(@id, @token, Interaction::ResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE, { flags: flags })
       @deferred = true
       @replied = true
     end
 
-    def edit_reply(content: nil, embeds: [], components: [], flags: nil)
-      data = { content: content }
-      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } unless embeds.empty?
-      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } unless components.empty?
-      data[:flags] = flags if flags
-
+    def edit_reply(**data)
       @bot.edit_original_interaction_response(@application_id, @token, data)
     end
 
-    def follow_up(content: nil, embeds: [], components: [], flags: nil, ephemeral: false, poll: nil)
-      flags ||= 0
-      flags |= Interaction::MessageFlags::EPHEMERAL if ephemeral
-
-      data = { content: content }
-      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } unless embeds.empty?
-      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } unless components.empty?
-      data[:flags] = flags if flags > 0
-      data[:poll] = poll if poll
-
-      @bot.create_followup_message(@application_id, @token, data)
+    def follow_up(ephemeral: false, flags: nil, **data)
+      data[:flags] = (flags || 0) | Interaction::MessageFlags::EPHEMERAL if ephemeral
+      data[:flags] = flags if flags && !ephemeral
+      @bot.create_followup_message(@application_id, @token, data.compact)
     end
 
     def delete_reply
@@ -214,13 +249,8 @@ module DiscordRuby
       @message = Message.new(bot, payload['message']) if payload['message']
     end
 
-    def update(content: nil, embeds: [], components: [], flags: nil)
+    def update(**data)
       raise "Interaction already replied to" if @replied
-      
-      data = { content: content }
-      data[:embeds] = embeds.map { |e| e.respond_to?(:to_h) ? e.to_h : e } unless embeds.empty?
-      data[:components] = components.map { |c| c.respond_to?(:to_h) ? c.to_h : c } unless components.empty?
-      data[:flags] = flags if flags
 
       @bot.respond_to_interaction(@id, @token, Interaction::ResponseType::UPDATE_MESSAGE, data)
       @replied = true
@@ -241,10 +271,18 @@ module DiscordRuby
       super
       @custom_id = @data['custom_id']
       @fields = {}
-      @data['components'].each do |row|
-        row['components'].each do |component|
-          @fields[component['custom_id']] = component['value']
+      collect_fields(@data['components'] || [])
+    end
+
+    private
+
+    def collect_fields(components)
+      components.each do |component|
+        if component['custom_id']
+          @fields[component['custom_id']] = component.fetch('values') { component['value'] }
         end
+        collect_fields(component['components']) if component['components']
+        collect_fields([component['component']]) if component['component']
       end
     end
   end

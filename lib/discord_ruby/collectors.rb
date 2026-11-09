@@ -48,7 +48,7 @@ module DiscordRuby
     end
 
     def stop_listening
-      # To be implemented by subclasses
+
     end
   end
 

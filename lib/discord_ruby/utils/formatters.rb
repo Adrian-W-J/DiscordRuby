@@ -130,6 +130,36 @@ module DiscordRuby
         text.gsub('```', '\\`\\`\\`')
       end
 
+      def self.progress_bar(current, total, length: 10, empty: '░', full: '█')
+        percentage = [0, [1, current.to_f / total].min].max
+        filled = (percentage * length).round
+        empty_len = length - filled
+        "#{full * filled}#{empty * empty_len} #{(percentage * 100).round}%"
+      end
+
+      def self.table(headers, rows)
+        return "" if headers.empty? && rows.empty?
+
+        all_rows = [headers] + rows
+        column_widths = (0...headers.length).map do |i|
+          all_rows.map { |row| row[i].to_s.length }.max
+        end
+
+        output = "```\n"
+
+
+        output += headers.map.with_index { |h, i| h.to_s.ljust(column_widths[i]) }.join(' | ') + "\n"
+        output += column_widths.map { |w| '-' * w }.join('-+-') + "\n"
+
+
+        rows.each do |row|
+          output += row.map.with_index { |cell, i| cell.to_s.ljust(column_widths[i]) }.join(' | ') + "\n"
+        end
+
+        output += "```"
+        output
+      end
+
       def self.parse_snowflake(id)
         snowflake = id.to_i
         {

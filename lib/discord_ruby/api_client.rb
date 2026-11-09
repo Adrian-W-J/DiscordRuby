@@ -13,13 +13,13 @@ module DiscordRuby
       )
     end
 
-    def request(method, path, params: nil, body: nil, headers: {})
+    def request(method, path, params: nil, body: nil, headers: {}, files: {})
       uri = URI("#{DiscordRuby::API_BASE}#{path}")
       uri.query = URI.encode_www_form(params) if params && !params.empty?
-      
+
       if ENV['DEBUG']
-        puts "[DEBUG] API Request: #{method.upcase} #{uri}"
-        puts "[DEBUG] Body: #{body.inspect}" if body
+        route = path.sub(%r{\A(/(?:webhooks|interactions)/[^/]+/)[^/]+}, '\1[REDACTED]')
+        puts "[DEBUG] API Request: #{method.upcase} #{route}"
       end
 
       request_class = case method.to_s.downcase
@@ -34,7 +34,18 @@ module DiscordRuby
 
       request = request_class.new(uri)
       request.initialize_http_header(@headers.merge(headers))
-      request.body = JSON.generate(body) if body
+      if files.empty?
+        request.body = JSON.generate(body) if body
+      else
+        parts = [['payload_json', JSON.generate(body), {content_type: 'application/json'}]]
+        files.each_with_index do |(filename, bytes), index|
+          unless filename.is_a?(String) && !filename.empty? && !filename.match?(/[\r\n\/\\]/)
+            raise ArgumentError, 'upload filenames must be nonempty basenames'
+          end
+          parts << ["files[#{index}]", bytes, {filename: filename, content_type: 'application/octet-stream'}]
+        end
+        request.set_form(parts, 'multipart/form-data')
+      end
 
       response = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https') do |http|
         http.request(request)
@@ -72,28 +83,17 @@ module DiscordRuby
       request(:get, "/channels/#{channel_id}/messages", params: params)
     end
 
-    def send_message(channel_id, content = nil, **options)
-      body = {}
+    def send_message(channel_id, content = nil, files: {}, **options)
+      body = options.slice(:content, :tts, :embeds, :components, :flags, :poll, :message_reference, :sticker_ids, :allowed_mentions, :attachments)
       body[:content] = content if content
-      body[:tts] = options[:tts] if options.key?(:tts)
-      body[:embeds] = options[:embeds].map { |e| e.respond_to?(:to_h) ? e.to_h : e } if options.key?(:embeds) && options[:embeds]
-      body[:components] = options[:components].map { |c| c.respond_to?(:to_h) ? c.to_h : c } if options.key?(:components) && options[:components]
-      body[:flags] = options[:flags] if options.key?(:flags)
-      body[:poll] = options[:poll] if options.key?(:poll)
-      body[:message_reference] = options[:message_reference] if options.key?(:message_reference)
-      body[:sticker_ids] = options[:sticker_ids] if options.key?(:sticker_ids)
-
-      data = request(:post, "/channels/#{channel_id}/messages", body: body)
+      request_options = files.empty? ? {} : {files: files}
+      data = request(:post, "/channels/#{channel_id}/messages", body: MessagePayload.build(body), **request_options)
       Message.new(self, data)
     end
 
-    def edit_message(channel_id, message_id, content: nil, **options)
-      body = {}
-      body[:content] = content if content
-      body[:embeds] = options[:embeds].map { |e| e.respond_to?(:to_h) ? e.to_h : e } if options.key?(:embeds) && options[:embeds]
-      body[:components] = options[:components].map { |c| c.respond_to?(:to_h) ? c.to_h : c } if options.key?(:components) && options[:components]
-      body[:flags] = options[:flags] if options.key?(:flags)
-      request(:patch, "/channels/#{channel_id}/messages/#{message_id}", body: body)
+    def edit_message(channel_id, message_id, **options)
+      body = options.slice(:content, :embeds, :components, :flags, :allowed_mentions, :attachments)
+      request(:patch, "/channels/#{channel_id}/messages/#{message_id}", body: MessagePayload.build(body, edit: true, channel: true))
     end
 
     def pin_message(channel_id, message_id)
@@ -291,8 +291,8 @@ module DiscordRuby
     end
 
     def create_guild_sticker(guild_id, name:, description:, tags:, file:, **options)
-      # Discord stickers require multipart/form-data for file upload, 
-      # but for now we'll implement the basic structure.
+
+
       body = {name: name, description: description, tags: tags}
       body[:reason] = options[:reason] if options[:reason]
       request(:post, "/guilds/#{guild_id}/stickers", body: body)
@@ -306,7 +306,7 @@ module DiscordRuby
       request(:delete, "/guilds/#{guild_id}/stickers/#{sticker_id}")
     end
 
-    # Voice Region
+
     def list_voice_regions
       request(:get, '/voice/regions')
     end
@@ -315,12 +315,12 @@ module DiscordRuby
       request(:get, "/guilds/#{guild_id}/regions")
     end
 
-    # Audit Log
+
     def fetch_guild_audit_log(guild_id, **params)
       request(:get, "/guilds/#{guild_id}/audit-logs", params: params)
     end
 
-    # Scheduled Events
+
     def list_guild_scheduled_events(guild_id, with_user_count: false)
       request(:get, "/guilds/#{guild_id}/scheduled-events", params: {with_user_count: with_user_count})
     end
@@ -348,7 +348,7 @@ module DiscordRuby
       request(:get, "/guilds/#{guild_id}/scheduled-events/#{event_id}/users", params: params)
     end
 
-    # Guild Template
+
     def fetch_guild_template(template_code)
       request(:get, "/guilds/templates/#{template_code}")
     end
@@ -380,7 +380,7 @@ module DiscordRuby
       request(:delete, "/guilds/#{guild_id}/templates/#{template_code}")
     end
 
-    # Guild Welcome Screen
+
     def fetch_guild_welcome_screen(guild_id)
       request(:get, "/guilds/#{guild_id}/welcome-screen")
     end
@@ -389,7 +389,7 @@ module DiscordRuby
       request(:patch, "/guilds/#{guild_id}/welcome-screen", body: options)
     end
 
-    # Guild Onboarding
+
     def fetch_guild_onboarding(guild_id)
       request(:get, "/guilds/#{guild_id}/onboarding")
     end
@@ -398,7 +398,7 @@ module DiscordRuby
       request(:patch, "/guilds/#{guild_id}/onboarding", body: options)
     end
 
-    # Entitlements (Applications)
+
     def list_entitlements(application_id, **params)
       request(:get, "/applications/#{application_id}/entitlements", params: params)
     end
@@ -412,7 +412,7 @@ module DiscordRuby
       request(:delete, "/applications/#{application_id}/entitlements/#{entitlement_id}")
     end
 
-    # Polls (Message related)
+
     def expire_poll(channel_id, message_id)
       request(:post, "/channels/#{channel_id}/messages/#{message_id}/poll/expire")
     end
@@ -422,7 +422,7 @@ module DiscordRuby
       request(:get, "/channels/#{channel_id}/messages/#{message_id}/poll/answers/#{answer_id}", params: params)
     end
 
-    # Thread Management
+
     def start_thread_from_message(channel_id, message_id, name:, auto_archive_duration: nil, rate_limit_per_user: nil)
       body = {name: name}
       body[:auto_archive_duration] = auto_archive_duration if auto_archive_duration
@@ -488,7 +488,7 @@ module DiscordRuby
       request(:get, "/channels/#{channel_id}/users/@me/threads/archived/private", params: params)
     end
 
-    # Webhooks
+
     def create_webhook(channel_id, name:, avatar: nil)
       body = {name: name}
       body[:avatar] = avatar if avatar
@@ -523,7 +523,7 @@ module DiscordRuby
       request(:delete, "/webhooks/#{webhook_id}")
     end
 
-    # Auto Moderation
+
     def list_auto_moderation_rules(guild_id)
       request(:get, "/guilds/#{guild_id}/auto-moderation/rules")
     end
@@ -544,7 +544,7 @@ module DiscordRuby
       request(:delete, "/guilds/#{guild_id}/auto-moderation/rules/#{rule_id}")
     end
 
-    # Stage Instance
+
     def create_stage_instance(channel_id, topic:, privacy_level: nil, send_start_notification: nil)
       body = {channel_id: channel_id, topic: topic}
       body[:privacy_level] = privacy_level if privacy_level
@@ -608,11 +608,11 @@ module DiscordRuby
     end
 
     def create_interaction_response(interaction_id, token, type, data = {})
-      if data[:embeds]
-        data[:embeds] = data[:embeds].map { |e| e.respond_to?(:to_h) ? e.to_h : e }
-      end
-      if data[:components]
-        data[:components] = data[:components].map { |c| c.respond_to?(:to_h) ? c.to_h : c }
+      case type
+      when Interaction::ResponseType::CHANNEL_MESSAGE_WITH_SOURCE
+        data = MessagePayload.build(data)
+      when Interaction::ResponseType::UPDATE_MESSAGE
+        data = MessagePayload.build(data, edit: true)
       end
       request(:post, "/interactions/#{interaction_id}/#{token}/callback", body: {type: type, data: data})
     end
@@ -628,7 +628,11 @@ module DiscordRuby
     end
 
     def edit_original_interaction_response(application_id, token, data = {})
-      request(:patch, "/webhooks/#{application_id}/#{token}/messages/@original", body: data)
+      request(:patch, "/webhooks/#{application_id}/#{token}/messages/@original", body: MessagePayload.build(data, edit: true))
+    end
+
+    def get_original_interaction_response(application_id, token)
+      request(:get, "/webhooks/#{application_id}/#{token}/messages/@original")
     end
 
     def delete_original_interaction_response(application_id, token)
@@ -636,15 +640,21 @@ module DiscordRuby
     end
 
     def create_followup_message(application_id, token, data = {})
-      request(:post, "/webhooks/#{application_id}/#{token}", body: data)
+      request(:post, "/webhooks/#{application_id}/#{token}", body: MessagePayload.build(data))
     end
 
-    def execute_webhook(webhook_id, webhook_token, data = {}, wait: false)
-      request(:post, "/webhooks/#{webhook_id}/#{webhook_token}", params: {wait: wait}, body: data)
+    def execute_webhook(webhook_id, webhook_token, data = {}, wait: false, thread_id: nil)
+      body = MessagePayload.build(data)
+      params = {wait: wait, thread_id: thread_id}.compact
+      params[:with_components] = true if body[:components]
+      request(:post, "/webhooks/#{webhook_id}/#{webhook_token}", params: params, body: body)
     end
 
-    def edit_webhook_message(webhook_id, webhook_token, message_id, data = {})
-      request(:patch, "/webhooks/#{webhook_id}/#{webhook_token}/messages/#{message_id}", body: data)
+    def edit_webhook_message(webhook_id, webhook_token, message_id, data = {}, thread_id: nil)
+      body = MessagePayload.build(data, edit: true)
+      params = {thread_id: thread_id}.compact
+      params[:with_components] = true if body[:components]
+      request(:patch, "/webhooks/#{webhook_id}/#{webhook_token}/messages/#{message_id}", params: params, body: body)
     end
 
     def delete_webhook_message(webhook_id, webhook_token, message_id)

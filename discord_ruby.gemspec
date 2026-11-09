@@ -1,6 +1,8 @@
+require_relative 'lib/discord_ruby/version'
+
 Gem::Specification.new do |spec|
   spec.name          = 'discord_ruby'
-  spec.version       = '0.1.0'
+  spec.version       = DiscordRuby::VERSION
   spec.authors       = ['DiscordRuby Author']
   spec.email         = ['support@example.com']
 
@@ -9,7 +11,7 @@ Gem::Specification.new do |spec|
   spec.homepage      = 'https://github.com/yourusername/discord_ruby'
   spec.license       = 'MIT'
 
-  spec.files = Dir.glob('lib/**/*.rb') + ['README.md', 'Gemfile', 'discord_ruby.gemspec', 'LICENSE']
+  spec.files = Dir.glob(['lib/**/*.rb', 'docs/**/*.md']) + ['README.md', 'Gemfile', 'discord_ruby.gemspec', 'LICENSE']
   spec.require_paths = ['lib']
 
   spec.add_runtime_dependency 'websocket-client-simple', '~> 0.5'

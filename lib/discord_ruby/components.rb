@@ -205,7 +205,7 @@ module DiscordRuby
 
       attr_accessor :custom_id, :style, :label, :min_length, :max_length, :required, :value, :placeholder
 
-      def initialize(custom_id:, style:, label:, min_length: nil, max_length: nil, required: true, value: nil, placeholder: nil)
+      def initialize(custom_id:, style:, label: nil, min_length: nil, max_length: nil, required: true, value: nil, placeholder: nil)
         @custom_id = custom_id
         @style = style
         @label = label
@@ -229,6 +229,202 @@ module DiscordRuby
           placeholder: @placeholder
         }
         payload.compact
+      end
+    end
+
+    class TextDisplay
+      TYPE = Interaction::ComponentType::TEXT_DISPLAY
+
+      attr_accessor :content
+
+      def initialize(content)
+        @content = content
+      end
+
+      def to_h
+        {
+          type: TYPE,
+          content: @content
+        }
+      end
+    end
+
+    class Section
+      TYPE = Interaction::ComponentType::SECTION
+
+      attr_accessor :components, :accessory
+
+      def initialize(components: [], accessory: nil)
+        @components = components.flatten
+        @accessory = accessory
+      end
+
+      def add_text(content)
+        @components << TextDisplay.new(content)
+        self
+      end
+
+      def set_accessory(component)
+        @accessory = component
+        self
+      end
+
+      def to_h
+        payload = {
+          type: TYPE,
+          components: @components.map(&:to_h),
+          accessory: @accessory&.to_h
+        }
+        payload.compact
+      end
+    end
+
+    class Container
+      TYPE = Interaction::ComponentType::CONTAINER
+
+      attr_accessor :components, :accent_color, :spoiler
+
+      def initialize(components: [], accent_color: nil, spoiler: false)
+        @components = components.flatten
+        @accent_color = accent_color
+        @spoiler = spoiler
+      end
+
+      def add_component(component)
+        @components << component
+        self
+      end
+
+      def self.build(**options)
+        container = new(**options)
+        yield container if block_given?
+        container
+      end
+
+      def add_text(content)
+        add_component(TextDisplay.new(content))
+      end
+
+      def add_row(&block)
+        add_component(ActionRow.build(&block))
+      end
+
+      def to_h
+        payload = {
+          type: TYPE,
+          components: @components.map(&:to_h),
+          accent_color: @accent_color,
+          spoiler: @spoiler
+        }
+        payload.compact
+      end
+    end
+
+    class Separator
+      TYPE = Interaction::ComponentType::SEPARATOR
+
+      def initialize(divider: true, spacing: 1)
+        raise ArgumentError, 'separator spacing must be 1 (small) or 2 (large)' unless [1, 2].include?(spacing)
+
+        @divider = divider
+        @spacing = spacing
+      end
+
+      def to_h
+        { type: TYPE, divider: @divider, spacing: @spacing }
+      end
+    end
+
+    class MediaItem
+      attr_accessor :url, :description, :spoiler
+
+      def initialize(url:, description: nil, spoiler: false)
+        @url = url
+        @description = description
+        @spoiler = spoiler
+      end
+
+      def to_h
+        payload = {
+          media: { url: @url },
+          description: @description,
+          spoiler: @spoiler
+        }
+        payload.compact
+      end
+    end
+
+    class Thumbnail
+      TYPE = Interaction::ComponentType::THUMBNAIL
+
+      attr_accessor :media_item
+
+      def initialize(url: nil, media_item: nil)
+        @media_item = media_item || MediaItem.new(url: url)
+      end
+
+      def to_h
+        @media_item.to_h.merge(type: TYPE)
+      end
+    end
+
+    class MediaGallery
+      TYPE = Interaction::ComponentType::MEDIA_GALLERY
+
+      attr_accessor :items
+
+      def initialize(items = [])
+        @items = items
+      end
+
+      def add_item(url:, description: nil, spoiler: false)
+        @items << MediaItem.new(url: url, description: description, spoiler: spoiler)
+        self
+      end
+
+      def to_h
+        {
+          type: TYPE,
+          items: @items.map(&:to_h)
+        }
+      end
+    end
+
+    class File
+      TYPE = Interaction::ComponentType::FILE
+
+      attr_accessor :url, :description, :spoiler
+
+      def initialize(url:, description: nil, spoiler: false)
+        @url = url
+        @description = description
+        @spoiler = spoiler
+      end
+
+      def to_h
+        payload = {
+          type: TYPE,
+          file: { url: @url },
+          spoiler: @spoiler
+        }
+        payload.compact
+      end
+    end
+
+    class Label
+      TYPE = Interaction::ComponentType::LABEL
+
+      def initialize(label:, component:, description: nil)
+        @label = label
+        @component = component
+        @description = description
+      end
+
+      def to_h
+        component = @component.to_h.transform_keys(&:to_sym)
+        component.delete(:label) if component[:type] == TextInput::TYPE
+        component.delete(:disabled) if component[:disabled] == false
+        {type: TYPE, label: @label, description: @description, component: component}.compact
       end
     end
 

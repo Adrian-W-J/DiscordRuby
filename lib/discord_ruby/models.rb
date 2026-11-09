@@ -232,8 +232,12 @@ module DiscordRuby
       @bot.delete_message(@channel_id, id)
     end
 
-    def edit(content: nil, **options)
-      @bot.edit_message(@channel_id, id, content: content, **options)
+    def edit(**options)
+      @bot.edit_message(@channel_id, id, **options)
+    end
+
+    def components_v2?
+      ((@flags || 0) & Interaction::MessageFlags::IS_COMPONENTS_V2) != 0
     end
 
     def add_reaction(emoji)

@@ -1,59 +1,67 @@
 module DiscordRuby
   module Managers
-    class MessageManager < CachedManager
+    class MessageManager
       attr_reader :channel_id
 
       def initialize(bot, channel_id)
-        super(bot)
+        @bot = bot
         @channel_id = channel_id
       end
 
-      def fetch_all(limit: 50, before: nil, after: nil, around: nil, cache: true)
-        data = @bot.api.get_channel_messages(@channel_id, limit: limit, before: before, after: after, around: around)
-        messages = data.map { |d| Message.new(@bot, d) }
-        messages.each { |m| @cache[m.id] = m } if cache
-        messages
+      def fetch(id, force: false, cache: true)
+        id = id.to_s
+        if !force && @bot.respond_to?(:messages)
+          existing = @bot.messages.get(id)
+          return existing if existing&.channel_id.to_s == @channel_id.to_s
+        end
+
+        remember(@bot.fetch_message(@channel_id, id), cache)
       end
 
-      def fetch(id, cache: true)
-        data = @bot.api.get_channel_message(@channel_id, id)
-        message = Message.new(@bot, data)
-        @cache[id] = message if cache
-        message
+      def fetch_all(cache: true, **options)
+        @bot.fetch_channel_messages(@channel_id, **options).map do |data|
+          remember(Message.new(@bot, data), cache)
+        end
       end
 
-      def create(content = nil, **options, &block)
-        message = @bot.api.send_message(@channel_id, content, **options, &block)
-        @cache[message.id] = message
-        message
+      def create(content = nil, **options)
+        remember(@bot.send_message(@channel_id, content, **options))
       end
 
-      def edit(id, content = nil, **options, &block)
-        message = @bot.api.edit_message(@channel_id, id, content: content, **options, &block)
-        @cache[id] = message
-        message
+      def edit(id, **options)
+        data = @bot.edit_message(@channel_id, id, **options)
+        remember(Message.new(@bot, data))
       end
 
-      def delete(id, reason: nil)
-        @bot.api.delete_message(@channel_id, id, reason: reason)
-        @cache.delete(id)
-      end
-
-      def bulk_delete(message_ids, reason: nil)
-        @bot.api.bulk_delete_messages(@channel_id, message_ids, reason: reason)
-        message_ids.each { |id| @cache.delete(id) }
+      def delete(id)
+        result = @bot.delete_message(@channel_id, id)
+        @bot.messages.delete(id.to_s) if @bot.respond_to?(:messages)
+        result
       end
 
       def fetch_pinned
-        @bot.api.get_pinned_messages(@channel_id).map { |d| Message.new(@bot, d) }
+        @bot.fetch_pinned_messages(@channel_id)
       end
 
-      def pin(id, reason: nil)
-        @bot.api.pin_message(@channel_id, id, reason: reason)
+      def pin(id)
+        @bot.pin_message(@channel_id, id)
       end
 
-      def unpin(id, reason: nil)
-        @bot.api.unpin_message(@channel_id, id, reason: reason)
+      def unpin(id)
+        @bot.unpin_message(@channel_id, id)
+      end
+
+      def bulk_delete(ids)
+        result = @bot.bulk_delete_messages(@channel_id, ids)
+        ids.each { |id| @bot.messages.delete(id.to_s) } if @bot.respond_to?(:messages)
+        result
+      end
+
+      private
+
+      def remember(message, cache = true)
+        @bot.messages.set(message.id, message) if cache && @bot.respond_to?(:messages)
+        message
       end
     end
   end

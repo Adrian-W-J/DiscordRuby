@@ -9,8 +9,7 @@ module DiscordRuby
       when InteractionType::MODAL_SUBMIT
         ModalSubmitInteraction.new(bot, payload)
       when InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE
-
-        BaseInteraction.new(bot, payload)
+        AutocompleteInteraction.new(bot, payload)
       else
         BaseInteraction.new(bot, payload)
       end
@@ -72,6 +71,10 @@ module DiscordRuby
       SEPARATOR = 14
       CONTAINER = 17
       LABEL = 18
+      FILE_UPLOAD = 19
+      RADIO_GROUP = 21
+      CHECKBOX_GROUP = 22
+      CHECKBOX = 23
     end
 
     module ButtonStyle
@@ -80,6 +83,7 @@ module DiscordRuby
       SUCCESS = 3
       DANGER = 4
       LINK = 5
+      PREMIUM = 6
     end
 
     module TextInputStyle
@@ -138,22 +142,11 @@ module DiscordRuby
   end
 
   def self.from_data(bot, payload)
-    case payload['type']
-    when InteractionType::APPLICATION_COMMAND
-      CommandInteraction.new(bot, payload)
-    when InteractionType::MESSAGE_COMPONENT
-      MessageComponentInteraction.new(bot, payload)
-    when InteractionType::MODAL_SUBMIT
-      ModalSubmitInteraction.new(bot, payload)
-    when InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE
-
-      BaseInteraction.new(bot, payload)
-    else
-      BaseInteraction.new(bot, payload)
-    end
+    Interaction.from_data(bot, payload)
   end
 
   class BaseInteraction
+    attr_reader :context, :authorizing_integration_owners, :attachment_size_limit
     attr_reader :bot, :id, :application_id, :type, :data, :guild_id, :channel_id, :member, :user, :token, :version, :app_permissions, :locale, :guild_locale, :entitlements
 
     def initialize(bot, payload)
@@ -161,13 +154,20 @@ module DiscordRuby
       @id = payload['id']
       @application_id = payload['application_id']
       @type = payload['type']
-      @data = payload['data']
+      @data = payload['data'] || {}
+      @locale = payload['locale']
+      @guild_locale = payload['guild_locale']
+      @context = payload['context']
+      @authorizing_integration_owners = payload['authorizing_integration_owners'] || {}
+      @entitlements = payload['entitlements'] || []
+      @attachment_size_limit = payload['attachment_size_limit']
       @guild_id = payload['guild_id']
       @channel_id = payload['channel_id']
       @token = payload['token']
       @version = payload['version']
       @member = Member.new(bot, payload['member'].merge('guild_id' => @guild_id)) if payload['member']
-      @user = User.new(bot, payload['user'] || payload.dig('member', 'user'))
+      user_data = payload['user'] || payload.dig('member', 'user')
+      @user = User.new(bot, user_data) if user_data
       @app_permissions = Permissions.new(payload['app_permissions']) if payload['app_permissions']
       @replied = false
       @deferred = false
@@ -225,16 +225,96 @@ module DiscordRuby
   end
 
   class CommandInteraction < BaseInteraction
-    attr_reader :command_name, :options
+    attr_reader :command_name, :options, :command_type, :target_id, :resolved
 
     def initialize(bot, payload)
       super
       @command_name = @data['name']
       @options = @data['options'] || []
+      @command_type = @data['type'] || Interaction::ApplicationCommandType::CHAT_INPUT
+      @target_id = @data['target_id']
+      @resolved = @data['resolved'] || {}
     end
 
     def get_option(name)
       @options.find { |opt| opt['name'] == name }&.fetch('value', nil)
+    end
+
+    def resolved_option(name, *subcommands)
+      options = @options
+      subcommands.each do |subcommand|
+        options = options.find { |option| option['name'] == subcommand }&.fetch('options', []) || []
+      end
+      option = options.find { |item| item['name'] == name }
+      return unless option
+
+      id = option['value']
+      case option['type']
+      when 6
+        resolved_user(id)
+      when 7
+        data = @resolved.dig('channels', id)
+        Channel.new(@bot, data) if data
+      when 8
+        resolved_role(id)
+      when 9
+        resolved_role(id) || resolved_user(id)
+      when 11
+        data = @resolved.dig('attachments', id)
+        Attachment.new(@bot, data) if data
+      else
+        id
+      end
+    end
+
+    def target
+      case @command_type
+      when Interaction::ApplicationCommandType::USER
+        data = @resolved.dig('users', @target_id)
+        User.new(@bot, data) if data
+      when Interaction::ApplicationCommandType::MESSAGE
+        data = @resolved.dig('messages', @target_id)
+        Message.new(@bot, data) if data
+      end
+    end
+
+    private
+
+    def resolved_user(id)
+      user = @resolved.dig('users', id)
+      return unless user
+
+      member = @resolved.dig('members', id)
+      return User.new(@bot, user) unless member
+
+      Member.new(@bot, member.merge('user' => user, 'guild_id' => @guild_id))
+    end
+
+    def resolved_role(id)
+      role = @resolved.dig('roles', id)
+      Role.new(@bot, role.merge('guild_id' => @guild_id)) if role
+    end
+  end
+
+  class AutocompleteInteraction < CommandInteraction
+    def focused_option
+      options = @options
+      until options.empty?
+        focused = options.find { |option| option['focused'] }
+        return focused if focused
+
+        options = options.flat_map { |option| option.fetch('options', []) }
+      end
+      nil
+    end
+
+    def respond(choices)
+      raise 'Interaction already replied to' if @replied
+      raise ArgumentError, 'autocomplete accepts at most 25 choices' unless choices.is_a?(Array) && choices.size <= 25
+
+      response = @bot.create_autocomplete_response(@id, @token, choices)
+      @replied = true
+      response
     end
   end
 
@@ -265,13 +345,21 @@ module DiscordRuby
   end
 
   class ModalSubmitInteraction < BaseInteraction
-    attr_reader :custom_id, :fields
+    attr_reader :custom_id, :fields, :resolved
 
     def initialize(bot, payload)
       super
       @custom_id = @data['custom_id']
       @fields = {}
+      @resolved = @data['resolved'] || {}
       collect_fields(@data['components'] || [])
+    end
+
+    def files(custom_id)
+      Array(@fields[custom_id]).filter_map do |id|
+        attachment = @resolved.dig('attachments', id)
+        Attachment.new(@bot, attachment) if attachment
+      end
     end
 
     private

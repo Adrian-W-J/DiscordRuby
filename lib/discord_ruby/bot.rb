@@ -3,19 +3,19 @@ module DiscordRuby
     attr_reader :gateway, :users, :guilds, :channels, :members, :messages, :application_id
     attr_accessor :ready
 
-    def initialize(token:, intents: 513, gateway_url: nil, cache_size: 1000)
-      super(token: token)
-      @gateway = Gateway.new(token: token, intents: intents, gateway_url: gateway_url)
+    def initialize(token:, intents: 513, gateway_url: nil, cache_size: 1000, cache_ttl: nil, shard: nil, before_identify: nil, **rest_options)
+      super(token: token, **rest_options)
+      @gateway = Gateway.new(token: token, intents: intents, gateway_url: gateway_url, shard: shard, before_identify: before_identify)
       @command_registry = CommandRegistry.new
       @autocomplete_registry = CommandRegistry.new
       @component_handlers = Hash.new { |hash, key| hash[key] = [] }
       @modal_handlers = Hash.new { |hash, key| hash[key] = [] }
       @interaction_handlers = []
-      @users = Cache.new(limit: cache_size)
-      @guilds = Cache.new(limit: cache_size)
-      @channels = Cache.new(limit: cache_size)
-      @members = Cache.new(limit: cache_size)
-      @messages = Cache.new(limit: cache_size)
+      @users = Cache.new(limit: cache_size, ttl: cache_ttl)
+      @guilds = Cache.new(limit: cache_size, ttl: cache_ttl)
+      @channels = Cache.new(limit: cache_size, ttl: cache_ttl)
+      @members = Cache.new(limit: cache_size, ttl: cache_ttl)
+      @messages = Cache.new(limit: cache_size, ttl: cache_ttl)
       @ready = false
 
       attach_default_handlers
@@ -23,6 +23,10 @@ module DiscordRuby
 
     def on(event, &block)
       @gateway.on(event, &block)
+    end
+
+    def sweep_caches
+      [@users, @guilds, @channels, @members, @messages].sum(&:sweep)
     end
 
     def off(event, handler_id)
@@ -108,6 +112,22 @@ module DiscordRuby
 
     def on_entitlement_delete(&block)
       on('ENTITLEMENT_DELETE', &block)
+    end
+
+    def on_subscription_create(&block)
+      on('SUBSCRIPTION_CREATE', &block)
+    end
+
+    def on_subscription_update(&block)
+      on('SUBSCRIPTION_UPDATE', &block)
+    end
+
+    def on_subscription_delete(&block)
+      on('SUBSCRIPTION_DELETE', &block)
+    end
+
+    def on_application_command_permissions_update(&block)
+      on('APPLICATION_COMMAND_PERMISSIONS_UPDATE', &block)
     end
 
     def on_poll_vote_add(&block)
@@ -394,6 +414,10 @@ module DiscordRuby
       @gateway.send_presence(status: status, activities: activities, afk: afk, since: since)
     end
 
+    def update_voice_state(guild_id, channel_id, self_mute: false, self_deaf: false)
+      @gateway.send_voice_state_update(guild_id, channel_id, self_mute: self_mute, self_deaf: self_deaf)
+    end
+
     def set_status(status)
       set_presence(status: status)
     end
@@ -438,6 +462,8 @@ module DiscordRuby
       end
 
       case interaction
+      when AutocompleteInteraction
+        @autocomplete_registry.dispatch(interaction.command_name, interaction)
       when CommandInteraction
         @command_registry.dispatch(interaction.command_name, interaction)
       when MessageComponentInteraction

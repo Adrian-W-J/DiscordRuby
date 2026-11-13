@@ -8,7 +8,13 @@ module DiscordRuby
   class Gateway
     attr_reader :token, :intents, :sequence, :session_id, :heartbeat_interval, :application_id
 
-    def initialize(token:, intents: 513, gateway_url: nil)
+    def initialize(token:, intents: 513, gateway_url: nil, shard: nil, before_identify: nil)
+      if shard && !(shard.is_a?(Array) && shard.size == 2 && shard.all?(Integer) && shard[0].between?(0, shard[1] - 1))
+        raise ArgumentError, 'shard must be [id, count] with 0 <= id < count'
+      end
+
+      @shard = shard&.dup&.freeze
+      @before_identify = before_identify
       @token = token
       @intents = intents
       @gateway_url = gateway_url || 'wss://gateway.discord.gg/?v=10&encoding=json'
@@ -36,8 +42,8 @@ module DiscordRuby
     end
 
     def run
-      connect
       @running = true
+      connect
       while @running
         sleep 1
       end
@@ -45,10 +51,12 @@ module DiscordRuby
 
     def connect
       return if @connected
+      @stopping = false
 
       puts "[DEBUG] Connecting to #{@gateway_url}..." if ENV['DEBUG']
       gateway = self
       @socket = WebSocket::Client::Simple.connect(@gateway_url)
+      socket = @socket
       @socket.on :message do |message|
         gateway.handle_message(message.data)
       rescue StandardError => error
@@ -67,11 +75,14 @@ module DiscordRuby
       end
 
       @socket.on :close do |event|
+        next unless gateway.instance_variable_get(:@socket).equal?(socket)
+
         puts "[DEBUG] WebSocket connection closed: #{event.inspect}" if ENV['DEBUG']
         gateway.instance_variable_set(:@connected, false)
         gateway.dispatch('close', event)
         gateway.stop_heartbeat
-        gateway.try_reconnect
+        gateway.try_reconnect unless gateway.instance_variable_get(:@stopping) ||
+                                     gateway.instance_variable_get(:@restarting)
       end
     end
 
@@ -130,6 +141,9 @@ module DiscordRuby
     end
 
     def identify
+      return if @before_identify && !@before_identify.call(-> { @stopping })
+      return if @stopping
+
       send_payload(2, identify_payload)
     end
 
@@ -183,6 +197,12 @@ module DiscordRuby
       send_payload(8, payload)
     end
 
+    def send_voice_state_update(guild_id, channel_id, self_mute: false, self_deaf: false)
+      send_payload(4, {
+        guild_id: guild_id, channel_id: channel_id, self_mute: self_mute, self_deaf: self_deaf
+      })
+    end
+
     def send_presence(status:, activities: [], afk: false, since: nil)
       payload = {
         since: since,
@@ -217,12 +237,13 @@ module DiscordRuby
     end
 
     def stop_heartbeat
-      return unless @heartbeat_thread
-      @heartbeat_thread.kill
+      thread = @heartbeat_thread
       @heartbeat_thread = nil
+      thread.kill if thread && thread != Thread.current
     end
 
     def disconnect
+      @stopping = true
       @running = false
       @socket.close if @socket
       @connected = false
@@ -230,19 +251,22 @@ module DiscordRuby
     end
 
     def restart
+      @restarting = true
       stop_heartbeat
       @socket.close if @socket
       @connected = false
       sleep(@reconnect_delay)
       @reconnect_delay = [@reconnect_delay * 2, 60].min
-      connect
+      connect unless @stopping
+    ensure
+      @restarting = false
     end
 
     def try_reconnect
       @connected = false
       sleep(@reconnect_delay)
       @reconnect_delay = [@reconnect_delay * 2, 60].min
-      connect
+      connect unless @stopping
     end
 
     def dispatch(event_name, data)
@@ -262,12 +286,13 @@ module DiscordRuby
       {
         token: @token,
         intents: @intents,
+        shard: @shard,
         properties: {
           '$os' => RbConfig::CONFIG['host_os'],
           '$browser' => 'discord_ruby',
           '$device' => 'discord_ruby'
         }
-      }
+      }.compact
     end
   end
 end

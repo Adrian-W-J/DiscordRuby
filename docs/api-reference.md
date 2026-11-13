@@ -82,7 +82,9 @@ Each method below takes a block. Use the raw event string with `on` when you nee
 
 `DiscordRuby::APIClient.new(token:, default_headers: {})` works without a Gateway connection. The methods below are also available on `Bot`. Use string IDs for Discord objects. Unless a helper wraps the result in a model, methods return the decoded JSON response with string keys. An empty response becomes `{}`. For a JSON error response, the client raises with Discord's status and error payload.
 
-`request(method, path, params: nil, body: nil, headers: {}, files: {})` accepts an API-relative path such as `'/users/@me'`. Use `params` for query parameters and `body` for JSON. `files` selects multipart encoding and takes a filename-to-bytes-or-IO hash. The API response determines which fields and permissions are required. The client does not currently retry a rate-limited REST request for you.
+`request(method, path, params: nil, body: nil, headers: {}, files: {}, form: nil)` accepts an API-relative path such as `'/users/@me'`. Use `params` for query parameters and `body` for JSON. `files` selects multipart encoding and takes a filename-to-bytes-or-IO hash.
+
+Each client learns Discord's rate-limit buckets and waits when a bucket is exhausted. It retries HTTP 429 responses using Discord's requested delay, up to three times by default. Set `rate_limit_retries:` on `APIClient.new` or `Bot.new` to change that limit. Uploads from streams that cannot be safely replayed surface the 429 to the caller. Rate-limit state is local to each client instance.
 
 ### Common return types
 
@@ -102,7 +104,7 @@ The signatures show Ruby arguments and defaults. Methods that take `**options` g
 
 ```text
 initialize(token:, default_headers: {})
-request(method, path, params: nil, body: nil, headers: {}, files: {})
+request(method, path, params: nil, body: nil, headers: {}, files: {}, form: nil)
 fetch_my_user
 fetch_user(user_id)
 modify_current_user(username: nil, avatar: nil)
@@ -115,6 +117,7 @@ fetch_channel_messages(channel_id, limit: 50, before: nil, after: nil, around: n
 ```text
 send_message(channel_id, content = nil, files: {}, **options)
 edit_message(channel_id, message_id, **options)
+forward_message(channel_id, source_channel_id:, message_id:, guild_id: nil)
 pin_message(channel_id, message_id)
 unpin_message(channel_id, message_id)
 fetch_pinned_messages(channel_id)
@@ -170,7 +173,7 @@ edit_guild_emoji(guild_id, emoji_id, **options)
 delete_guild_emoji(guild_id, emoji_id)
 fetch_guild_stickers(guild_id)
 fetch_guild_sticker(guild_id, sticker_id)
-create_guild_sticker(guild_id, name:, description:, tags:, file:, **options)
+create_guild_sticker(guild_id, name:, description:, tags:, file:, filename: nil, reason: nil)
 edit_guild_sticker(guild_id, sticker_id, **options)
 delete_guild_sticker(guild_id, sticker_id)
 list_voice_regions
@@ -209,6 +212,11 @@ edit_guild_onboarding(guild_id, **options)
 
 ```text
 list_entitlements(application_id, **params)
+fetch_entitlement(application_id, entitlement_id)
+consume_entitlement(application_id, entitlement_id)
+list_skus(application_id)
+list_sku_subscriptions(sku_id, user_id:, before: nil, after: nil, limit: nil)
+fetch_sku_subscription(sku_id, subscription_id)
 create_test_entitlement(application_id, sku_id, owner_id, owner_type)
 delete_test_entitlement(application_id, entitlement_id)
 expire_poll(channel_id, message_id)
@@ -220,6 +228,7 @@ fetch_poll_answer_voters(channel_id, message_id, answer_id, after: nil, limit: 1
 ```text
 start_thread_from_message(channel_id, message_id, name:, auto_archive_duration: nil, rate_limit_per_user: nil)
 start_thread_without_message(channel_id, name:, auto_archive_duration: nil, type: nil, invitable: nil, rate_limit_per_user: nil)
+create_forum_post(channel_id, name:, message:, applied_tags: nil, auto_archive_duration: nil, rate_limit_per_user: nil, files: {})
 join_thread(channel_id)
 add_thread_member(channel_id, user_id)
 leave_thread(channel_id)
@@ -263,7 +272,14 @@ delete_stage_instance(channel_id)
 ```text
 create_dm_channel(user_id)
 send_dm(user_id, content, **options)
-fetch_application_commands(application_id, guild_id: nil)
+fetch_application_commands(application_id, guild_id: nil, with_localizations: nil)
+fetch_command_permissions(application_id, guild_id, command_id: nil)
+edit_command_permissions(application_id, guild_id, command_id, permissions:, bearer_token:)
+list_application_emojis(application_id)
+fetch_application_emoji(application_id, emoji_id)
+create_application_emoji(application_id, name:, image:)
+edit_application_emoji(application_id, emoji_id, name:)
+delete_application_emoji(application_id, emoji_id)
 create_global_application_command(application_id, data)
 create_guild_application_command(application_id, guild_id, data)
 delete_application_command(application_id, command_id, guild_id: nil)
@@ -314,7 +330,7 @@ Builders assemble payloads locally. They perform no REST calls on their own.
 ## Current limitations
 
 - The normal `require 'discord_ruby'` entry point loads `Bot` and the models listed above. Some similarly named classes and utilities in the repository are outside that entry point. Use the methods described here when starting a bot.
-- The checkout exposes `Commands::Framework`, but its builder and event hookup do not match the default load path. Use `on_command` with `register_guild_command` or `register_global_command`. Autocomplete has a low-level response method, but `on_autocomplete` is not dispatched by the current Bot implementation.
+- `ShardGroup` runs shards in one Ruby process. It coordinates Identify requests inside that group. Separate processes need their own coordination for session-start budgets and REST limits.
 - `Paginator` and `Wizard` are experimental. Their collector logic expects message objects from `fetch_reply`, which currently returns a hash. Use explicit component handlers for multi-step flows.
-- The sticker creation helper has no multipart upload implementation. The message file upload example is supported through the separate `send_message(files: ...)` path.
+- Voice state controls send Gateway requests for channel changes, mute, and deafen. Voice audio, the voice WebSocket, and DAVE encryption are separate work.
 - Offline checks cover the V2 request payloads and modal parsing. They do not verify Discord-side permissions or rendering in your server.

@@ -3,12 +3,13 @@ module DiscordRuby
     class Command
       attr_reader :name, :description, :options, :callback, :type, :checks
 
-      def initialize(name, description, options: [], type: 1, &callback)
+      def initialize(name, description, options: [], type: 1, payload: nil, &callback)
         @name = name
         @description = description
         @options = options
         @type = type
         @callback = callback
+        @payload = payload
         @checks = []
       end
 
@@ -23,6 +24,8 @@ module DiscordRuby
       end
 
       def to_h
+        return @payload.dup if @payload
+
         {
           name: @name,
           description: @description,
@@ -75,7 +78,7 @@ module DiscordRuby
       end
 
       def register(command)
-        @commands[command.name] = command
+        @commands[command.name.downcase] = command
       end
 
       def get(name)
@@ -87,11 +90,11 @@ module DiscordRuby
       end
 
       def sync_global
-        @bot.api.bulk_overwrite_global_application_commands(@bot.application_id, all.map(&:to_h))
+        @bot.bulk_overwrite_global_commands(all.map(&:to_h))
       end
 
       def sync_guild(guild_id)
-        @bot.api.bulk_overwrite_guild_application_commands(@bot.application_id, guild_id, all.map(&:to_h))
+        @bot.bulk_overwrite_guild_commands(guild_id, all.map(&:to_h))
       end
     end
 
@@ -99,46 +102,22 @@ module DiscordRuby
       def initialize(bot)
         @bot = bot
         @registry = CommandRegistry.new(bot)
-        setup_listeners
       end
 
       def register_command(name, description, **options, &block)
-        command = Command.new(name, description, **options, &block)
-        @registry.register(command)
-        command
+        register(Command.new(name, description, **options, &block))
       end
 
       def slash_command(name, description, &block)
-        builder = DiscordRuby::Builders::SlashCommandBuilder.new(name, description)
+        builder = DiscordRuby::Builders::SlashCommandBuilder.new.name(name).description(description)
         proxy = CommandProxy.new(builder)
         yield proxy
 
-        command = Command.new(
-          builder.instance_variable_get(:@data)[:name],
-          builder.instance_variable_get(:@data)[:description],
-          options: builder.instance_variable_get(:@data)[:options] || [],
-          type: builder.instance_variable_get(:@data)[:type] || 1,
-          &proxy.callback
-        )
-        proxy.checks.each { |c| command.add_check(&c) }
-        @registry.register(command)
-        command
-      end
-
-      def setup_listeners
-        @bot.on(:interaction_create) do |interaction|
-          next unless interaction.is_a?(DiscordRuby::CommandInteraction)
-
-          command = @registry.get(interaction.command_name)
-          if command
-            begin
-              command.execute(interaction)
-            rescue => e
-              warn "Error executing command #{command.name}: #{e.message}"
-              puts e.backtrace
-            end
-          end
-        end
+        data = builder.to_h
+        command = Command.new(data[:name], data[:description], options: data.fetch(:options, []),
+                              type: data[:type], payload: data, &proxy.callback)
+        proxy.checks.each { |check| command.add_check(&check) }
+        register(command)
       end
 
       def sync_commands(guild_id = nil)
@@ -147,6 +126,19 @@ module DiscordRuby
         else
           @registry.sync_global
         end
+      end
+
+      private
+
+      def register(command)
+        raise ArgumentError, 'a command callback is required' unless command.callback
+
+        name = command.name.downcase
+        unless @registry.get(name)
+          @bot.on_command(name) { |interaction| @registry.get(name).execute(interaction) }
+        end
+        @registry.register(command)
+        command
       end
     end
 

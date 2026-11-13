@@ -8,23 +8,25 @@ module DiscordRuby
     end
 
     def guild
-      @bot.guilds.cache[@guild_id] if @guild_id
+      @bot.guilds.get(@guild_id) if @guild_id && @bot.respond_to?(:guilds)
     end
 
     def channel
-      @bot.channels.cache[@channel_id] if @channel_id
+      @bot.channels.get(@channel_id) if @channel_id && @bot.respond_to?(:channels)
     end
 
-    def send(content = nil, **options, &block)
-      @bot.api.execute_webhook(id, @token, content: content, **options, &block)
+    def send(content = nil, wait: true, thread_id: nil, files: {}, **options)
+      options[:content] = content unless content.nil?
+      data = @bot.execute_webhook(id, webhook_token, options, wait: wait, thread_id: thread_id, files: files)
+      Message.new(@bot, data) if wait
     end
 
-    def edit(name: nil, avatar: nil, channel_id: nil, reason: nil)
-      @bot.api.modify_webhook(id, name: name, avatar: avatar, channel_id: channel_id, reason: reason)
+    def edit(**options)
+      Webhook.new(@bot, @bot.edit_webhook(id, **options))
     end
 
-    def delete(reason: nil)
-      @bot.api.delete_webhook(id, reason: reason)
+    def delete
+      @bot.delete_webhook(id)
     end
 
     def set_name(name)
@@ -36,15 +38,23 @@ module DiscordRuby
     end
 
     def fetch_message(message_id, thread_id: nil)
-      @bot.api.get_webhook_message(id, @token, message_id, thread_id: thread_id)
+      Message.new(@bot, @bot.fetch_webhook_message(id, webhook_token, message_id, thread_id: thread_id))
     end
 
-    def edit_message(message_id, content = nil, **options, &block)
-      @bot.api.edit_webhook_message(id, @token, message_id, content: content, **options, &block)
+    def edit_message(message_id, content = nil, thread_id: nil, files: {}, **options)
+      options[:content] = content unless content.nil?
+      data = @bot.edit_webhook_message(id, webhook_token, message_id, options, thread_id: thread_id, files: files)
+      Message.new(@bot, data)
     end
 
     def delete_message(message_id, thread_id: nil)
-      @bot.api.delete_webhook_message(id, @token, message_id, thread_id: thread_id)
+      @bot.delete_webhook_message(id, webhook_token, message_id, thread_id: thread_id)
+    end
+
+    private
+
+    def webhook_token
+      @token || raise(ArgumentError, 'this webhook has no token')
     end
   end
 end

@@ -124,16 +124,17 @@ module DiscordRuby
         add_select(custom_id: custom_id, type: :channel, **opts)
       end
 
-      def add_button(label: nil, custom_id: nil, style: :primary, url: nil, emoji: nil, disabled: false)
+      def add_button(label: nil, custom_id: nil, style: :primary, url: nil, emoji: nil, disabled: false, sku_id: nil)
         btn_style = case style
                     when :primary then Interaction::ButtonStyle::PRIMARY
                     when :secondary then Interaction::ButtonStyle::SECONDARY
                     when :success then Interaction::ButtonStyle::SUCCESS
                     when :danger then Interaction::ButtonStyle::DANGER
                     when :link then Interaction::ButtonStyle::LINK
+                    when :premium then Interaction::ButtonStyle::PREMIUM
                     else style
                     end
-        button = Component::Button.new(label: label, custom_id: custom_id, style: btn_style, url: url, emoji: emoji, disabled: disabled)
+        button = Component::Button.new(label: label, custom_id: custom_id, style: btn_style, url: url, emoji: emoji, disabled: disabled, sku_id: sku_id)
 
         row = @data[:components].last
         if row && row[:type] == Component::ActionRow::TYPE && row[:components].size < 5 && row[:components].none? { |c| c[:type] >= 3 }
@@ -659,6 +660,11 @@ module DiscordRuby
 
       def content(val)
         @data[:message][:content] = val
+        self
+      end
+
+      def components(value)
+        @data[:message][:components] = value
         self
       end
 

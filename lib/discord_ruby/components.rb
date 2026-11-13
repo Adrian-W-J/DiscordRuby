@@ -44,8 +44,8 @@ module DiscordRuby
         self
       end
 
-    def add_button(label: nil, custom_id: nil, style: Interaction::ButtonStyle::PRIMARY, url: nil, emoji: nil, disabled: false)
-      add_component(Button.new(label: label, custom_id: custom_id, style: style, url: url, emoji: emoji, disabled: disabled))
+    def add_button(label: nil, custom_id: nil, style: Interaction::ButtonStyle::PRIMARY, url: nil, emoji: nil, disabled: false, sku_id: nil)
+      add_component(Button.new(label: label, custom_id: custom_id, style: style, url: url, emoji: emoji, disabled: disabled, sku_id: sku_id))
     end
 
     def add_string_select(custom_id:, options: [], placeholder: nil, min_values: 1, max_values: 1, disabled: false)
@@ -83,21 +83,31 @@ module DiscordRuby
     class Button
       TYPE = Interaction::ComponentType::BUTTON
 
-      attr_accessor :style, :label, :custom_id, :url, :disabled, :emoji
+      attr_accessor :style, :label, :custom_id, :url, :disabled, :emoji, :sku_id
 
-      def initialize(style:, label: nil, custom_id: nil, url: nil, disabled: false, emoji: nil)
+      def initialize(style:, label: nil, custom_id: nil, url: nil, disabled: false, emoji: nil, sku_id: nil)
         @style = style
         @label = label
         @custom_id = custom_id
         @url = url
         @disabled = disabled
         @emoji = emoji
+        @sku_id = sku_id
       end
 
       def to_h
+        if @style == Interaction::ButtonStyle::PREMIUM
+          if @sku_id.to_s.empty? || @label || @custom_id || @url || @emoji
+            raise ArgumentError, 'premium buttons require sku_id and cannot have label, custom_id, url or emoji'
+          end
+        elsif @sku_id
+          raise ArgumentError, 'sku_id requires the premium button style'
+        end
+
         payload = {
           type: TYPE,
           style: @style,
+          sku_id: @sku_id,
           label: @label,
           custom_id: @custom_id,
           url: @url,
@@ -408,6 +418,51 @@ module DiscordRuby
           spoiler: @spoiler
         }
         payload.compact
+      end
+    end
+
+    class FileUpload
+      def initialize(custom_id:, min_values: nil, max_values: nil, required: nil, file_types: nil)
+        @data = {type: Interaction::ComponentType::FILE_UPLOAD, custom_id: custom_id,
+                 min_values: min_values, max_values: max_values, required: required,
+                 file_types: file_types}.compact
+      end
+
+      def to_h
+        @data.dup
+      end
+    end
+
+    class RadioGroup
+      def initialize(custom_id:, options:, required: nil)
+        @data = {type: Interaction::ComponentType::RADIO_GROUP, custom_id: custom_id,
+                 options: options.map(&:to_h), required: required}.compact
+      end
+
+      def to_h
+        @data.dup
+      end
+    end
+
+    class CheckboxGroup
+      def initialize(custom_id:, options:, min_values: nil, max_values: nil, required: nil)
+        @data = {type: Interaction::ComponentType::CHECKBOX_GROUP, custom_id: custom_id,
+                 options: options.map(&:to_h), min_values: min_values, max_values: max_values,
+                 required: required}.compact
+      end
+
+      def to_h
+        @data.dup
+      end
+    end
+
+    class Checkbox
+      def initialize(custom_id:, default: nil)
+        @data = {type: Interaction::ComponentType::CHECKBOX, custom_id: custom_id, default: default}.compact
+      end
+
+      def to_h
+        @data.dup
       end
     end
 

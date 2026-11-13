@@ -10,6 +10,7 @@ These docs cover the local **0.3.0** source. Start with the checkout and Bundler
 | [Messages and Components V2](docs/messages.md) | Plain messages, embeds, polls, V2 cards, buttons, select menus, attachments, and webhooks |
 | [Interactions and events](docs/interactions.md) | Register commands, reply or defer, update messages, open modals, and listen for events |
 | [API reference](docs/api-reference.md) | Public REST and Gateway methods, return types, builders, models, and implementation gaps |
+| [Additional Discord features](docs/feature-coverage.md) | Autocomplete, context menus, user installs, permissions, forums, stickers, forwarding, app emoji, and monetization |
 
 From the repository root, install dependencies and check that the library loads:
 

@@ -131,6 +131,14 @@ module DiscordRuby
     def mention
       "<@&#{id}>"
     end
+
+    def edit(**options)
+      @bot.edit_guild_role(@guild_id, id, **options)
+    end
+
+    def delete
+      @bot.delete_guild_role(@guild_id, id)
+    end
   end
 
   class Emoji < BaseModel
@@ -207,6 +215,7 @@ module DiscordRuby
   end
 
   class Message < BaseModel
+    attr_reader :message_snapshots
     attr_reader :channel_id, :guild_id, :author, :member, :content, :timestamp, :edited_timestamp, :tts, :mention_everyone, :mentions, :mention_roles, :mention_channels, :attachments, :embeds, :reactions, :nonce, :pinned, :webhook_id, :type, :activity, :application, :application_id, :message_reference, :flags, :referenced_message, :interaction, :thread, :components, :sticker_items, :stickers, :position, :role_subscription_data, :resolved, :poll
 
     def initialize(bot, data)
@@ -240,8 +249,20 @@ module DiscordRuby
       ((@flags || 0) & Interaction::MessageFlags::IS_COMPONENTS_V2) != 0
     end
 
+    def forward_to(channel_id)
+      @bot.forward_message(channel_id, source_channel_id: @channel_id, message_id: id, guild_id: @guild_id)
+    end
+
     def add_reaction(emoji)
       @bot.add_reaction(@channel_id, id, emoji)
+    end
+
+    def create_reaction_collector(**options)
+      ReactionCollector.new(@bot, id, channel_id: @channel_id, **options)
+    end
+
+    def create_component_collector(**options)
+      InteractionCollector.new(@bot, channel_id: @channel_id, message_id: id, **options)
     end
 
     def start_thread(name:, auto_archive_duration: nil)
@@ -276,11 +297,27 @@ module DiscordRuby
     end
 
     def fetch_channels
-      @bot.fetch_guild_channels(id).map { |c| Channel.new(@bot, c) }
+      @bot.fetch_guild_channels(id)
     end
 
     def fetch_members(limit: 1000, after: nil)
-      @bot.list_guild_members(id, limit: limit, after: after).map { |m| Member.new(@bot, m.merge('guild_id' => id)) }
+      @bot.list_guild_members(id, limit: limit, after: after)
+    end
+
+    def fetch_member(user_id)
+      @bot.fetch_guild_member(id, user_id)
+    end
+
+    def create_channel(name:, type:, **options)
+      @bot.create_guild_channel(id, name, type, **options)
+    end
+
+    def fetch_roles
+      @bot.fetch_guild_roles(id)
+    end
+
+    def create_role(**options)
+      @bot.create_guild_role(id, **options)
     end
 
     def fetch_audit_logs(**params)
@@ -348,14 +385,42 @@ module DiscordRuby
   end
 
   class Channel < BaseModel
+    def create_forum_post(**options)
+      @bot.create_forum_post(id, **options)
+    end
+
     attr_reader :type, :guild_id, :position, :permission_overwrites, :name, :topic, :nsfw, :last_message_id, :bitrate, :user_limit, :rate_limit_per_user, :recipients, :icon, :owner_id, :application_id, :managed, :parent_id, :last_pin_timestamp, :rtc_region, :video_quality_mode, :message_count, :member_count, :thread_metadata, :member, :default_auto_archive_duration, :permissions, :flags, :total_message_sent, :available_tags, :applied_tags, :default_reaction_emoji, :default_thread_rate_limit_per_user, :default_sort_order, :default_forum_layout
 
-    def send_message(content, **options)
+    def send_message(content = nil, **options)
       @bot.send_message(id, content, **options)
     end
 
-    def fetch_messages(limit: 50)
-      @bot.fetch_channel_messages(id, limit: limit).map { |m| Message.new(@bot, m) }
+    def fetch_message(message_id)
+      @bot.fetch_message(id, message_id)
+    end
+
+    def messages
+      @messages ||= Managers::MessageManager.new(@bot, id)
+    end
+
+    def fetch_webhooks
+      @bot.fetch_channel_webhooks(id).map { |data| Webhook.new(@bot, data) }
+    end
+
+    def create_webhook(name, **options)
+      Webhook.new(@bot, @bot.create_webhook(id, name: name, **options))
+    end
+
+    def create_message_collector(**options)
+      MessageCollector.new(@bot, id, **options)
+    end
+
+    def fetch_messages(limit: 50, **pagination)
+      @bot.fetch_channel_messages(id, limit: limit, **pagination).map { |m| Message.new(@bot, m) }
+    end
+
+    def edit(**options)
+      @bot.edit_channel(id, **options)
     end
 
     def fetch_pinned_messages

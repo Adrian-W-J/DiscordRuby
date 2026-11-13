@@ -2,18 +2,34 @@ require 'json'
 require 'net/http'
 require 'uri'
 require 'openssl'
+require 'time'
+require_relative 'rest_rate_limits'
 
 module DiscordRuby
+  class APIError < RuntimeError
+    attr_reader :status, :body
+
+    def initialize(status, body)
+      @status = status
+      @body = body
+      super("Discord API error #{status}: #{body.inspect}")
+    end
+  end
+
+  class RateLimitError < APIError; end
+
   class APIClient
-    def initialize(token:, default_headers: {})
+    def initialize(token:, default_headers: {}, rate_limit_retries: 3, rest_rate_limits: nil, open_timeout: nil, read_timeout: nil)
       @token = token
+      @rest_rate_limits = rest_rate_limits || RestRateLimits.new(retries: rate_limit_retries)
+      @http_options = {open_timeout: open_timeout, read_timeout: read_timeout}.compact
       @headers = default_headers.merge(
         'Authorization' => "Bot #{@token}",
         'Content-Type' => 'application/json'
       )
     end
 
-    def request(method, path, params: nil, body: nil, headers: {}, files: {})
+    def request(method, path, params: nil, body: nil, headers: {}, files: {}, form: nil)
       uri = URI("#{DiscordRuby::API_BASE}#{path}")
       uri.query = URI.encode_www_form(params) if params && !params.empty?
 
@@ -34,7 +50,9 @@ module DiscordRuby
 
       request = request_class.new(uri)
       request.initialize_http_header(@headers.merge(headers))
-      if files.empty?
+      if form
+        request.set_form(form, 'multipart/form-data')
+      elsif files.empty?
         request.body = JSON.generate(body) if body
       else
         parts = [['payload_json', JSON.generate(body), {content_type: 'application/json'}]]
@@ -47,8 +65,15 @@ module DiscordRuby
         request.set_form(parts, 'multipart/form-data')
       end
 
-      response = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https') do |http|
-        http.request(request)
+      uploads = form ? form.map { |part| part[1] } : files.values
+      streams = uploads.select { |value| value.respond_to?(:read) }.uniq
+      replayable = streams.all? { |stream| stream.is_a?(File) || (defined?(StringIO) && stream.is_a?(StringIO)) }
+      positions = streams.map(&:pos) if replayable
+      response = @rest_rate_limits.request(method, path, request['authorization'], replayable: replayable) do |attempt|
+        streams.zip(positions).each { |stream, position| stream.seek(position) } if attempt.positive?
+        Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https', **@http_options) do |http|
+          http.request(request)
+        end
       end
 
       parse_response(response)
@@ -56,6 +81,10 @@ module DiscordRuby
 
     def fetch_my_user
       request(:get, '/users/@me')
+    end
+
+    def fetch_gateway_bot
+      request(:get, '/gateway/bot')
     end
 
     def fetch_user(user_id)
@@ -75,6 +104,18 @@ module DiscordRuby
       Channel.new(self, data)
     end
 
+    def edit_channel(channel_id, **options)
+      Channel.new(self, request(:patch, "/channels/#{channel_id}", body: options))
+    end
+
+    def delete_channel(channel_id)
+      Channel.new(self, request(:delete, "/channels/#{channel_id}"))
+    end
+
+    def fetch_message(channel_id, message_id)
+      Message.new(self, request(:get, "/channels/#{channel_id}/messages/#{message_id}"))
+    end
+
     def fetch_channel_messages(channel_id, limit: 50, before: nil, after: nil, around: nil)
       params = {limit: limit}
       params[:before] = before if before
@@ -84,29 +125,48 @@ module DiscordRuby
     end
 
     def send_message(channel_id, content = nil, files: {}, **options)
-      body = options.slice(:content, :tts, :embeds, :components, :flags, :poll, :message_reference, :sticker_ids, :allowed_mentions, :attachments)
+      body = options.slice(:content, :tts, :embeds, :components, :flags, :poll, :message_reference, :sticker_ids, :allowed_mentions, :attachments, :nonce, :enforce_nonce)
       body[:content] = content if content
       request_options = files.empty? ? {} : {files: files}
       data = request(:post, "/channels/#{channel_id}/messages", body: MessagePayload.build(body), **request_options)
       Message.new(self, data)
     end
 
-    def edit_message(channel_id, message_id, **options)
+    def edit_message(channel_id, message_id, files: {}, **options)
       body = options.slice(:content, :embeds, :components, :flags, :allowed_mentions, :attachments)
-      request(:patch, "/channels/#{channel_id}/messages/#{message_id}", body: MessagePayload.build(body, edit: true, channel: true))
+      uploads = files.empty? ? {} : {files: files}
+      request(:patch, "/channels/#{channel_id}/messages/#{message_id}", body: MessagePayload.build(body, edit: true, channel: true), **uploads)
+    end
+
+    def forward_message(channel_id, source_channel_id:, message_id:, guild_id: nil)
+      reference = {type: 1, channel_id: source_channel_id, message_id: message_id, guild_id: guild_id}.compact
+      send_message(channel_id, message_reference: reference)
     end
 
     def pin_message(channel_id, message_id)
-      request(:put, "/channels/#{channel_id}/pins/#{message_id}")
+      request(:put, "/channels/#{channel_id}/messages/pins/#{message_id}")
     end
 
     def unpin_message(channel_id, message_id)
-      request(:delete, "/channels/#{channel_id}/pins/#{message_id}")
+      request(:delete, "/channels/#{channel_id}/messages/pins/#{message_id}")
     end
 
     def fetch_pinned_messages(channel_id)
-      data = request(:get, "/channels/#{channel_id}/pins")
-      data.map { |m| Message.new(self, m) }
+      messages = []
+      before = nil
+      loop do
+        page = fetch_channel_pins(channel_id, before: before)
+        items = page.fetch('items')
+        messages.concat(items.map { |pin| Message.new(self, pin.fetch('message')) })
+        break unless page['has_more'] && !items.empty?
+
+        before = items.last.fetch('pinned_at')
+      end
+      messages
+    end
+
+    def fetch_channel_pins(channel_id, limit: 50, before: nil)
+      request(:get, "/channels/#{channel_id}/messages/pins", params: {limit: limit, before: before}.compact)
     end
 
     def delete_message(channel_id, message_id)
@@ -290,12 +350,21 @@ module DiscordRuby
       Sticker.new(self, data.merge('guild_id' => guild_id))
     end
 
-    def create_guild_sticker(guild_id, name:, description:, tags:, file:, **options)
+    def create_guild_sticker(guild_id, name:, description:, tags:, file:, filename: nil, reason: nil)
+      filename ||= File.basename(file.path) if file.respond_to?(:path)
+      unless filename.is_a?(String) && !filename.empty? && !filename.match?(/[\r\n\/\\]/)
+        raise ArgumentError, 'provide a sticker filename or an open file with a path'
+      end
 
+      content_type = {
+        '.png' => 'image/png', '.apng' => 'image/apng', '.gif' => 'image/gif', '.json' => 'application/json'
+      }[File.extname(filename).downcase]
+      raise ArgumentError, 'unsupported sticker file extension' unless content_type
 
-      body = {name: name, description: description, tags: tags}
-      body[:reason] = options[:reason] if options[:reason]
-      request(:post, "/guilds/#{guild_id}/stickers", body: body)
+      form = [['name', name], ['description', description], ['tags', tags],
+              ['file', file, {filename: filename, content_type: content_type}]]
+      headers = reason ? {'X-Audit-Log-Reason' => URI.encode_www_form_component(reason).gsub('+', '%20')} : {}
+      request(:post, "/guilds/#{guild_id}/stickers", form: form, headers: headers)
     end
 
     def edit_guild_sticker(guild_id, sticker_id, **options)
@@ -403,6 +472,27 @@ module DiscordRuby
       request(:get, "/applications/#{application_id}/entitlements", params: params)
     end
 
+    def fetch_entitlement(application_id, entitlement_id)
+      request(:get, "/applications/#{application_id}/entitlements/#{entitlement_id}")
+    end
+
+    def consume_entitlement(application_id, entitlement_id)
+      request(:post, "/applications/#{application_id}/entitlements/#{entitlement_id}/consume")
+    end
+
+    def list_skus(application_id)
+      request(:get, "/applications/#{application_id}/skus")
+    end
+
+    def list_sku_subscriptions(sku_id, user_id:, before: nil, after: nil, limit: nil)
+      params = {user_id: user_id, before: before, after: after, limit: limit}.compact
+      request(:get, "/skus/#{sku_id}/subscriptions", params: params)
+    end
+
+    def fetch_sku_subscription(sku_id, subscription_id)
+      request(:get, "/skus/#{sku_id}/subscriptions/#{subscription_id}")
+    end
+
     def create_test_entitlement(application_id, sku_id, owner_id, owner_type)
       body = {sku_id: sku_id, owner_id: owner_id, owner_type: owner_type}
       request(:post, "/applications/#{application_id}/entitlements", body: body)
@@ -441,6 +531,12 @@ module DiscordRuby
 
     def join_thread(channel_id)
       request(:put, "/channels/#{channel_id}/thread-members/@me")
+    end
+
+    def create_forum_post(channel_id, name:, message:, applied_tags: nil, auto_archive_duration: nil, rate_limit_per_user: nil, files: {})
+      body = {name: name, message: MessagePayload.build(message), applied_tags: applied_tags,
+              auto_archive_duration: auto_archive_duration, rate_limit_per_user: rate_limit_per_user}.compact
+      request(:post, "/channels/#{channel_id}/threads", body: body, files: files)
     end
 
     def add_thread_member(channel_id, user_id)
@@ -576,9 +672,44 @@ module DiscordRuby
       send_message(channel['id'], content, **options)
     end
 
-    def fetch_application_commands(application_id, guild_id: nil)
+    def fetch_application_commands(application_id, guild_id: nil, with_localizations: nil)
       path = guild_id ? "/applications/#{application_id}/guilds/#{guild_id}/commands" : "/applications/#{application_id}/commands"
+      return request(:get, path) if with_localizations.nil?
+
+      request(:get, path, params: {with_localizations: with_localizations})
+    end
+
+    def fetch_command_permissions(application_id, guild_id, command_id: nil)
+      base = "/applications/#{application_id}/guilds/#{guild_id}/commands"
+      path = command_id ? "#{base}/#{command_id}/permissions" : "#{base}/permissions"
       request(:get, path)
+    end
+
+    def edit_command_permissions(application_id, guild_id, command_id, permissions:, bearer_token:)
+      raise ArgumentError, 'an OAuth bearer token is required' if bearer_token.to_s.empty?
+
+      request(:put, "/applications/#{application_id}/guilds/#{guild_id}/commands/#{command_id}/permissions",
+              body: {permissions: permissions}, headers: {'Authorization' => "Bearer #{bearer_token}"})
+    end
+
+    def list_application_emojis(application_id)
+      request(:get, "/applications/#{application_id}/emojis").fetch('items').map { |data| Emoji.new(self, data) }
+    end
+
+    def fetch_application_emoji(application_id, emoji_id)
+      Emoji.new(self, request(:get, "/applications/#{application_id}/emojis/#{emoji_id}"))
+    end
+
+    def create_application_emoji(application_id, name:, image:)
+      Emoji.new(self, request(:post, "/applications/#{application_id}/emojis", body: {name: name, image: image}))
+    end
+
+    def edit_application_emoji(application_id, emoji_id, name:)
+      Emoji.new(self, request(:patch, "/applications/#{application_id}/emojis/#{emoji_id}", body: {name: name}))
+    end
+
+    def delete_application_emoji(application_id, emoji_id)
+      request(:delete, "/applications/#{application_id}/emojis/#{emoji_id}")
     end
 
     def create_global_application_command(application_id, data)
@@ -643,37 +774,51 @@ module DiscordRuby
       request(:post, "/webhooks/#{application_id}/#{token}", body: MessagePayload.build(data))
     end
 
-    def execute_webhook(webhook_id, webhook_token, data = {}, wait: false, thread_id: nil)
+    def execute_webhook(webhook_id, webhook_token, data = nil, wait: false, thread_id: nil, files: {}, **options)
+      data = (data || {}).merge(options)
       body = MessagePayload.build(data)
       params = {wait: wait, thread_id: thread_id}.compact
       params[:with_components] = true if body[:components]
-      request(:post, "/webhooks/#{webhook_id}/#{webhook_token}", params: params, body: body)
+      uploads = files.empty? ? {} : {files: files}
+      request(:post, "/webhooks/#{webhook_id}/#{webhook_token}", params: params, body: body, **uploads)
     end
 
-    def edit_webhook_message(webhook_id, webhook_token, message_id, data = {}, thread_id: nil)
+    def fetch_webhook_message(webhook_id, webhook_token, message_id, thread_id: nil)
+      request(:get, "/webhooks/#{webhook_id}/#{webhook_token}/messages/#{message_id}", params: {thread_id: thread_id}.compact)
+    end
+
+    def edit_webhook_message(webhook_id, webhook_token, message_id, data = nil, thread_id: nil, files: {}, **options)
+      data = (data || {}).merge(options)
       body = MessagePayload.build(data, edit: true)
       params = {thread_id: thread_id}.compact
       params[:with_components] = true if body[:components]
-      request(:patch, "/webhooks/#{webhook_id}/#{webhook_token}/messages/#{message_id}", params: params, body: body)
+      uploads = files.empty? ? {} : {files: files}
+      request(:patch, "/webhooks/#{webhook_id}/#{webhook_token}/messages/#{message_id}", params: params, body: body, **uploads)
     end
 
-    def delete_webhook_message(webhook_id, webhook_token, message_id)
-      request(:delete, "/webhooks/#{webhook_id}/#{webhook_token}/messages/#{message_id}")
+    def delete_webhook_message(webhook_id, webhook_token, message_id, thread_id: nil)
+      params = thread_id ? {params: {thread_id: thread_id}} : {}
+      request(:delete, "/webhooks/#{webhook_id}/#{webhook_token}/messages/#{message_id}", **params)
     end
 
     private
 
     def parse_response(response)
-      body = response.body && !response.body.empty? ? JSON.parse(response.body) : {}
+      raw = response.body.to_s
+      body = raw.empty? ? {} : parse_json_body(raw)
 
       if response.code.to_i >= 400
-        warn "[ERROR] Discord API error #{response.code}: #{body.inspect}"
-        raise "Discord API error #{response.code}: #{body.inspect}"
+        error = response.code.to_i == 429 ? RateLimitError : APIError
+        raise error.new(response.code.to_i, body)
       end
 
       body
+    end
+
+    def parse_json_body(raw)
+      JSON.parse(raw)
     rescue JSON::ParserError
-      response.body
+      raw
     end
   end
 end

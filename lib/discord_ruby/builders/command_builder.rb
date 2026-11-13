@@ -45,7 +45,7 @@ module DiscordRuby
         self
       end
 
-      def add_option(name:, description:, type:, required: false, choices: nil, options: nil, channel_types: nil, min_value: nil, max_value: nil, min_length: nil, max_length: nil, autocomplete: false)
+      def add_option(name:, description:, type:, required: false, choices: nil, options: nil, channel_types: nil, min_value: nil, max_value: nil, min_length: nil, max_length: nil, autocomplete: false, name_localizations: nil, description_localizations: nil)
         option = {
           name: name,
           description: description,
@@ -60,6 +60,8 @@ module DiscordRuby
         option[:max_value] = max_value if max_value
         option[:min_length] = min_length if min_length
         option[:max_length] = max_length if max_length
+        option[:name_localizations] = name_localizations if name_localizations
+        option[:description_localizations] = description_localizations if description_localizations
 
         @data[:options] << option
         self
@@ -120,6 +122,16 @@ module DiscordRuby
         self
       end
 
+      def integration_types(*types)
+        @data[:integration_types] = types.flatten
+        self
+      end
+
+      def contexts(*contexts)
+        @data[:contexts] = contexts.flatten
+        self
+      end
+
       def default_member_permissions(permissions)
         @data[:default_member_permissions] = permissions.to_i.to_s
         self
@@ -131,7 +143,11 @@ module DiscordRuby
       end
 
       def to_h
-        @data
+        if [Constants::ApplicationCommandTypes::USER, Constants::ApplicationCommandTypes::MESSAGE].include?(@data[:type])
+          @data.except(:description, :description_localizations, :options)
+        else
+          @data
+        end
       end
     end
 
